@@ -1,10 +1,10 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 8.0 - Múltiples pestañas y delays aleatorios
+// Versión: 9.0 - Typing y Previews funcionales
 // Características:
 // - Conexión con código de emparejamiento
-// - Typing automático (simula escritura)
-// - Link Previews activados
+// - Typing automático con duración adaptada al delay
+// - Link Previews forzadas para URLs
 // - Múltiples pestañas GRUPOS*, GRUPOS1*, etc.
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios entre mensajes (mín/máx desde CONFIG)
@@ -221,22 +221,28 @@ function guardarLogLocal(texto) {
 }
 
 // ============================================
-// SIMULAR TYPING
+// FUNCIÓN PARA SIMULAR QUE ESTÁ ESCRIBIENDO (CORREGIDA)
 // ============================================
-async function simularTyping(sock, id_destino) {
+async function simularTyping(sock, id_destino, duracion) {
     try {
+        // Iniciar typing
         await sock.sendPresenceUpdate('composing', id_destino);
-        const tiempoTyping = Math.floor(Math.random() * 2000) + 2000; // 2-4 segundos
-        await new Promise(resolve => setTimeout(resolve, tiempoTyping));
+        guardarLogLocal(`   ✍️ Typing por ${duracion} segundos...`);
+        
+        // Mantener typing durante casi todo el delay
+        await new Promise(resolve => setTimeout(resolve, duracion * 1000));
+        
+        // Detener typing justo antes de enviar
         await sock.sendPresenceUpdate('paused', id_destino);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 500)); // Pequeña pausa antes de enviar
+        
     } catch (error) {
-        // Si falla el typing, continuamos
+        guardarLogLocal(`   ⚠️ Error en typing: ${error.message}`);
     }
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW)
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW FORZADO)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -244,11 +250,25 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Simular que está escribiendo
-        await simularTyping(sock, id_grupo);
+        // Extraer URLs del mensaje
+        const urls = mensaje.match(/https?:\/\/[^\s]+/g) || [];
         
-        // Enviar mensaje con link preview automático
-        await sock.sendMessage(id_grupo, { text: mensaje });
+        // Configurar opciones de link preview
+        const opciones = { text: mensaje };
+        
+        // Si hay URLs, forzar preview
+        if (urls.length > 0) {
+            opciones.linkPreview = {
+                title: '', // Se genera automático
+                description: '',
+                canonicalUrl: urls[0], // Usar la primera URL encontrada
+                matchedText: urls[0]
+            };
+            guardarLogLocal(`   🔗 Preview para: ${urls[0]}`);
+        }
+        
+        // Enviar mensaje con preview
+        await sock.sendMessage(id_grupo, opciones);
         
         return 'ENVIADO';
     } catch (error) {
@@ -263,7 +283,7 @@ function obtenerDelayAleatorio() {
     const min = CONFIG.tiempo_entre_mensajes_min || 2;
     const max = CONFIG.tiempo_entre_mensajes_max || 5;
     const delay = Math.floor(Math.random() * (max - min + 1) + min);
-    return delay * 1000; // Convertir a milisegundos
+    return delay; // Devolver en segundos
 }
 
 // ============================================
@@ -314,11 +334,19 @@ async function verificarMensajesLocales(sock) {
 
                 guardarLogLocal(`   📤 Enviando a: ${grupo.nombre || grupo.id}`);
                 
-                const delay = obtenerDelayAleatorio();
-                guardarLogLocal(`      Delay: ${delay/1000} segundos`);
-                await new Promise(resolve => setTimeout(resolve, delay));
+                // Obtener delay para este mensaje
+                const delaySegundos = obtenerDelayAleatorio();
                 
+                // SIMULAR TYPING durante casi todo el delay
+                await simularTyping(sock, grupo.id, delaySegundos * 0.8); // 80% del delay
+                
+                // Enviar mensaje
                 const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
+                
+                // Esperar el resto del delay después del envío
+                const restante = delaySegundos * 0.2 * 1000;
+                await new Promise(resolve => setTimeout(resolve, restante));
+                
                 guardarLogLocal(`      Resultado: ${estado}`);
             }
             
@@ -338,8 +366,8 @@ async function iniciarWhatsApp() {
     console.log('🤖 BOT WHATSAPP - MÚLTIPLES PESTAÑAS');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
-    console.log('✍️  Typing activado');
-    console.log('🔗 Link Previews activados');
+    console.log('✍️  Typing adaptativo activado');
+    console.log('🔗 Link Previews forzados');
     console.log('📝 Logs locales (carpeta logs/)\n');
 
     const url_sheets = leerURL();
@@ -475,6 +503,8 @@ async function iniciarWhatsApp() {
                                       `✅ Grupos activos: ${activos}\n` +
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                      `✍️  Typing adaptativo: activado\n` +
+                                      `🔗 Link Previews: forzados\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
