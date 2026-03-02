@@ -1,11 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 9.0 - Typing y Previews funcionales
+// Versión: 10.0 - Link Previews CORREGIDOS para Android
 // Características:
 // - Conexión con código de emparejamiento
-// - Typing automático con duración adaptada al delay
-// - Link Previews forzadas para URLs
-// - Múltiples pestañas GRUPOS*, GRUPOS1*, etc.
+// - Typing adaptativo (80% del delay)
+// - Link Previews forzados con getUrlInfo()
+// - Alta calidad de previsualización
+// - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios entre mensajes (mín/máx desde CONFIG)
 // - Descarga completa de agenda
@@ -13,7 +14,7 @@
 // - Logs solo locales
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -221,7 +222,7 @@ function guardarLogLocal(texto) {
 }
 
 // ============================================
-// FUNCIÓN PARA SIMULAR QUE ESTÁ ESCRIBIENDO (CORREGIDA)
+// FUNCIÓN PARA SIMULAR QUE ESTÁ ESCRIBIENDO
 // ============================================
 async function simularTyping(sock, id_destino, duracion) {
     try {
@@ -242,7 +243,27 @@ async function simularTyping(sock, id_destino, duracion) {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW FORZADO)
+// FUNCIÓN PARA GENERAR LINK PREVIEW (NUEVA)
+// ============================================
+async function generarLinkPreview(url) {
+    try {
+        // Usar getUrlInfo de Baileys para obtener la información de la URL
+        // Con thumbnailWidth: 1200 para alta calidad [citation:2]
+        const linkPreview = await getUrlInfo(url, {
+            thumbnailWidth: 1200,
+            fetchOpts: {
+                timeout: 5000,
+            },
+        });
+        return linkPreview;
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error generando preview: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW CORREGIDO)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -253,18 +274,25 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
         // Extraer URLs del mensaje
         const urls = mensaje.match(/https?:\/\/[^\s]+/g) || [];
         
-        // Configurar opciones de link preview
+        // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
-        // Si hay URLs, forzar preview
+        // Si hay URLs, generar link preview correctamente [citation:2]
         if (urls.length > 0) {
-            opciones.linkPreview = {
-                title: '', // Se genera automático
-                description: '',
-                canonicalUrl: urls[0], // Usar la primera URL encontrada
-                matchedText: urls[0]
-            };
-            guardarLogLocal(`   🔗 Preview para: ${urls[0]}`);
+            guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
+            
+            // Generar el preview usando getUrlInfo
+            const linkPreview = await generarLinkPreview(urls[0]);
+            
+            if (linkPreview) {
+                opciones.linkPreview = linkPreview;
+                guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
+            } else {
+                // Fallback al método anterior
+                opciones.linkPreview = {
+                    matchedText: urls[0]
+                };
+            }
         }
         
         // Enviar mensaje con preview
@@ -363,11 +391,11 @@ async function verificarMensajesLocales(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - MÚLTIPLES PESTAÑAS');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 10.0 (PREVIEWS CORREGIDOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews forzados');
+    console.log('🔗 Link Previews de alta calidad');
     console.log('📝 Logs locales (carpeta logs/)\n');
 
     const url_sheets = leerURL();
@@ -382,6 +410,9 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
+        // ============================================
+        // CONFIGURACIÓN DEL SOCKET CON LINK PREVIEW DE ALTA CALIDAD [citation:2]
+        // ============================================
         const sock = makeWASocket({
             version,
             auth: state,
@@ -391,7 +422,8 @@ async function iniciarWhatsApp() {
             syncFullHistory: false,
             markOnlineOnConnect: true,
             defaultQueryTimeoutMs: 60000,
-            shouldSyncHistoryMessage: () => false
+            shouldSyncHistoryMessage: () => false,
+            generateHighQualityLinkPreview: true,  // ACTIVADO para previews de alta calidad [citation:4]
         });
 
         // CÓDIGO DE EMPAREJAMIENTO
@@ -504,7 +536,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: forzados\n` +
+                                      `🔗 Link Previews: ALTA CALIDAD\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
