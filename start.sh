@@ -1,0 +1,45 @@
+#!/bin/bash
+
+echo "===================================="
+echo "🚀 INSTALADOR AUTOMÁTICO"
+echo "WHATSAPP BOT PARA TERMUX"
+echo "===================================="
+echo ""
+
+# PASO 1: Instalar Git (para poder descargar)
+echo " PASO 1: Instalando Git..."
+pkg install git -y
+
+# PASO 2: Ya tenemos Git, ahora ejecutamos todo
+echo " PASO 2: Descargando el bot..."
+git clone https://github.com/TU-USUARIO/whatsapp-bot-termux
+cd whatsapp-bot-termux
+
+# PASO 3: Pedir la URL
+echo ""
+echo "===================================="
+echo "🔗 NECESITAS TU URL DE GOOGLE SHEETS"
+echo "===================================="
+echo "1. Ve a Google Sheets"
+echo "2. Menú 'Control WhatsApp'"
+echo "3. Haz clic en 'Obtener URL'"
+echo "4. Copia la URL"
+echo "===================================="
+echo ""
+echo "✏️  Pega la URL aquí:"
+read URL_SHEETS
+
+# PASO 4: Guardar la URL
+echo $URL_SHEETS > url_sheets.txt
+
+# PASO 5: Ejecutar la configuración completa
+echo ""
+echo " PASO 3: Configurando todo..."
+bash setup.sh
+
+echo ""
+echo "===================================="
+echo "✅ TODO INSTALADO CORRECTAMENTE"
+echo "===================================="
+echo "El bot está listo para usar"
+echo ""
