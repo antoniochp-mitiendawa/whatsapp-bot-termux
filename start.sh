@@ -12,7 +12,7 @@ pkg install git -y
 
 # PASO 2: Ya tenemos Git, ahora ejecutamos todo
 echo " PASO 2: Descargando el bot..."
-git clone https://github.com/TU-USUARIO/whatsapp-bot-termux
+git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux
 cd whatsapp-bot-termux
 
 # PASO 3: Pedir la URL
