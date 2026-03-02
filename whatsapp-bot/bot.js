@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 12.0 - Con comando listagrupos
+// Versión: 13.0 - Actualizado para Baileys v6.7.19+
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing adaptativo (80% del delay)
@@ -11,6 +11,7 @@
 // - Delays aleatorios con formato "min-max" desde CONFIG
 // - Descarga completa de agenda
 // - Comandos "actualizar", "status" y "listagrupos" desde WhatsApp
+// - Cache de grupos para mejor rendimiento
 // - Logs solo locales
 // ============================================
 
@@ -45,6 +46,9 @@ if (!fs.existsSync(CONFIG.carpeta_logs)) {
 if (!fs.existsSync(CONFIG.carpeta_sesion)) {
     fs.mkdirSync(CONFIG.carpeta_sesion);
 }
+
+// Cache simple para grupos (recomendado por documentación Baileys)
+const groupCache = new Map();
 
 // ============================================
 // LEER URL DE GOOGLE SHEETS
@@ -379,19 +383,53 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: OBTENER GRUPOS DE WHATSAPP
+// NUEVA FUNCIÓN ACTUALIZADA: OBTENER GRUPOS DE WHATSAPP
 // ============================================
 async function obtenerGruposWhatsApp(sock) {
     try {
         guardarLogLocal('🔍 Obteniendo grupos de WhatsApp...');
         
-        // Obtener todos los grupos donde está el bot
-        const grupos = await sock.groupFetchAllParticipatingGroups();
+        // Verificar que el socket está conectado
+        if (!sock || !sock.user) {
+            guardarLogLocal('❌ Socket no conectado');
+            return [];
+        }
         
+        // Método 1: Usar groupFetchAllParticipatingGroups (documentado oficialmente)
+        // Este método devuelve un objeto con todos los grupos donde participa el bot
+        guardarLogLocal('   Usando groupFetchAllParticipatingGroups()...');
+        
+        const gruposObj = await sock.groupFetchAllParticipatingGroups();
+        
+        // Si el método falla o no existe, intentar método alternativo
+        if (!gruposObj || typeof gruposObj !== 'object') {
+            guardarLogLocal('   ⚠️ Método principal falló, intentando alternativas...');
+            
+            // Método 2: Intentar obtener grupos vía query (método más antiguo pero a veces funciona)
+            try {
+                const groups = await sock.groupQuery('participating');
+                if (groups && groups.length > 0) {
+                    const listaGrupos = groups.map(g => ({
+                        id: g.id,
+                        nombre: g.subject || 'Sin nombre'
+                    }));
+                    guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados (método alternativo)`);
+                    return listaGrupos;
+                }
+            } catch (altError) {
+                guardarLogLocal(`   ⚠️ Método alternativo falló: ${altError.message}`);
+            }
+            
+            return [];
+        }
+        
+        // Convertir objeto a array
         const listaGrupos = [];
         
-        // Convertir a formato {id, nombre}
-        for (const [id, info] of Object.entries(grupos)) {
+        for (const [id, info] of Object.entries(gruposObj)) {
+            // Actualizar caché
+            groupCache.set(id, info);
+            
             listaGrupos.push({
                 id: id,
                 nombre: info.subject || 'Sin nombre'
@@ -400,20 +438,39 @@ async function obtenerGruposWhatsApp(sock) {
         
         guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados`);
         return listaGrupos;
+        
     } catch (error) {
         guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
+        
+        // Intentar método alternativo en caso de error
+        try {
+            guardarLogLocal('   Intentando método alternativo por si el error es de versión...');
+            
+            // Algunas versiones usan groupMetadata con array vacío
+            const groups = await sock.groupMetadata('');
+            if (groups && groups.length > 0) {
+                const listaGrupos = groups.map(g => ({
+                    id: g.id,
+                    nombre: g.subject || 'Sin nombre'
+                }));
+                guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados (método alternativo)`);
+                return listaGrupos;
+            }
+        } catch (altError) {
+            guardarLogLocal(`   ❌ Método alternativo también falló: ${altError.message}`);
+        }
+        
         return [];
     }
 }
 
 // ============================================
-// NUEVA FUNCIÓN: ENVIAR GRUPOS A GOOGLE SHEETS
+// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS
 // ============================================
 async function enviarGruposASheets(url_sheets, grupos) {
     try {
         guardarLogLocal('📤 Enviando grupos a Google Sheets...');
         
-        // Usar la misma URL pero con POST
         const respuesta = await axios.post(url_sheets, {
             grupos: grupos
         });
@@ -432,21 +489,20 @@ async function enviarGruposASheets(url_sheets, grupos) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: GENERAR Y ENVIAR CSV
+// FUNCIÓN PARA GENERAR Y ENVIAR CSV
 // ============================================
 async function enviarCSVporWhatsApp(sock, remitente, grupos) {
     try {
-        // Crear contenido CSV
         let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
         grupos.forEach(g => {
-            csvContent += `${g.id},${g.nombre}\n`;
+            // Escapar comas en nombres si es necesario
+            const nombreEscapado = g.nombre.includes(',') ? `"${g.nombre}"` : g.nombre;
+            csvContent += `${g.id},${nombreEscapado}\n`;
         });
         
-        // Guardar archivo temporal
         const csvPath = path.join(CONFIG.carpeta_logs, 'grupos_exportados.csv');
         fs.writeFileSync(csvPath, csvContent);
         
-        // Enviar archivo por WhatsApp
         await sock.sendMessage(remitente, {
             document: fs.readFileSync(csvPath),
             fileName: 'grupos_exportados.csv',
@@ -467,13 +523,13 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 12.0 (CON LISTAGRUPOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.0 (ACTUALIZADA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews optimizados para Android');
     console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Nuevo comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
+    console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -482,7 +538,8 @@ async function iniciarWhatsApp() {
     }
 
     try {
-        const { version } = await fetchLatestBaileysVersion();
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
         
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
@@ -498,6 +555,25 @@ async function iniciarWhatsApp() {
             defaultQueryTimeoutMs: 60000,
             shouldSyncHistoryMessage: () => false,
             generateHighQualityLinkPreview: true,
+            // Configurar caché de grupos como recomienda la documentación
+            cachedGroupMetadata: async (jid) => groupCache.get(jid)
+        });
+
+        // Actualizar caché cuando cambien los grupos
+        sock.ev.on('groups.update', async (updates) => {
+            for (const update of updates) {
+                try {
+                    const metadata = await sock.groupMetadata(update.id);
+                    groupCache.set(update.id, metadata);
+                } catch (e) {}
+            }
+        });
+
+        sock.ev.on('group-participants.update', async (update) => {
+            try {
+                const metadata = await sock.groupMetadata(update.id);
+                groupCache.set(update.id, metadata);
+            } catch (e) {}
         });
 
         if (!sock.authState.creds.registered) {
@@ -564,9 +640,6 @@ async function iniciarWhatsApp() {
             await verificarMensajesLocales(sock);
         });
 
-        // ============================================
-        // COMANDOS DESDE WHATSAPP (INCLUYE LISTAGRUPOS)
-        // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
             if (mensaje.key && !mensaje.key.fromMe && mensaje.message) {
@@ -600,40 +673,32 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: OPTIMIZADOS PARA ANDROID\n` +
+                                      `🔗 Link Previews: OPTIMIZADOS\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
                     }
                     
-                    // ============================================
-                    // NUEVO COMANDO: LISTAGRUPOS
-                    // ============================================
                     if (cmd === 'listagrupos' || cmd === 'grupos') {
                         guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: listagrupos`);
                         
-                        // Responder inmediatamente que está procesando
                         await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos...' });
                         
-                        // Obtener grupos de WhatsApp
                         const grupos = await obtenerGruposWhatsApp(sock);
                         
                         if (grupos.length === 0) {
-                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos o hubo un error.' });
+                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos. Verifica que el bot esté en al menos un grupo.' });
                             return;
                         }
                         
-                        // Enviar a Google Sheets (POST)
                         const sheetsResult = await enviarGruposASheets(url_sheets, grupos);
                         
-                        // Enviar CSV por WhatsApp
                         const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
                         
-                        // Mensaje de confirmación
                         let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
                         confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
-                        confirmacion += sheetsResult ? '✅ Guardado en Google Sheets\n' : '❌ Error en Google Sheets\n';
+                        confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                         confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
                         
                         await sock.sendMessage(remitente, { text: confirmacion });
@@ -654,18 +719,12 @@ async function iniciarWhatsApp() {
     }
 }
 
-// ============================================
-// MANEJAR CIERRE
-// ============================================
 process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
     process.exit(0);
 });
 
-// ============================================
-// INICIAR
-// ============================================
 console.log('====================================');
 console.log('🚀 SISTEMA DE MENSAJES MULTI-PESTAÑA');
 console.log('====================================\n');
