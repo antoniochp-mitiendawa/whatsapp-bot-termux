@@ -43,24 +43,31 @@ npm install qrcode-terminal
 npm install node-cron
 npm install axios
 
-# PASO 5: Verificar que bot.js existe
-echo ""
-echo " PASO 4: Verificando archivos..."
-if [ -f "bot.js" ]; then
-    echo "✅ bot.js encontrado"
-else
-    echo "⚠️ bot.js no encontrado, pero continuamos"
-fi
-
 echo ""
 echo "===================================="
 echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
-echo "Para iniciar el bot:"
-echo "cd whatsapp-bot-termux/whatsapp-bot"
-echo "node bot.js"
+
+# PASO 5: PREGUNTAR SI QUIERE INICIAR AHORA
+echo "🤖 El bot ya está instalado"
 echo ""
-echo "La primera vez te pedirá tu número de teléfono"
-echo "Luego te dará un código para vincular WhatsApp"
+echo "¿Quieres iniciar el bot AHORA?"
+echo "Escribe 1 y presiona Enter para INICIAR"
+echo "Escribe 2 y presiona Enter para SALIR"
 echo ""
+read OPCION
+
+if [ "$OPCION" == "1" ]; then
+    echo ""
+    echo "🚀 INICIANDO BOT..."
+    echo "======================"
+    echo ""
+    node bot.js
+else
+    echo ""
+    echo "📝 Para iniciar el bot después:"
+    echo "cd whatsapp-bot-termux/whatsapp-bot"
+    echo "node bot.js"
+    echo ""
+fi
