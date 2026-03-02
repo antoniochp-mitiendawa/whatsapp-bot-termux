@@ -1,0 +1,53 @@
+#!/bin/bash
+
+echo "===================================="
+echo "🚀 INSTALADOR WHATSAPP BOT"
+echo "===================================="
+echo ""
+
+# PASO 1: Instalar lo básico
+echo " PASO 1: Instalando programas necesarios..."
+pkg update -y
+pkg install git -y
+pkg install nodejs -y
+pkg install yarn -y
+
+# PASO 2: Clonar el repositorio
+echo " PASO 2: Descargando el bot..."
+git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
+cd whatsapp-bot-termux
+
+# PASO 3: Guardar la URL en un archivo temporal
+echo ""
+echo "===================================="
+echo "🔗 URL DE GOOGLE SHEETS"
+echo "===================================="
+echo "1. Abre Google Sheets"
+echo "2. Menú 'Control WhatsApp'"
+echo "3. Haz clic en 'Obtener URL'"
+echo "4. Copia la URL"
+echo "===================================="
+echo ""
+echo "📝 Escribe la URL y presiona Enter:"
+read USER_URL
+echo $USER_URL > url_sheets.txt
+
+# PASO 4: Instalar dependencias
+echo ""
+echo " PASO 3: Instalando librerías..."
+cd whatsapp-bot
+npm init -y
+npm install @whiskeysockets/baileys
+npm install qrcode-terminal
+npm install node-cron
+npm install axios
+
+echo ""
+echo "===================================="
+echo "✅ INSTALACIÓN COMPLETA"
+echo "===================================="
+echo ""
+echo "Para iniciar el bot:"
+echo "cd whatsapp-bot-termux/whatsapp-bot"
+echo "node bot.js"
+echo ""
