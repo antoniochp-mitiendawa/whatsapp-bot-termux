@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 11.0 - Delay formato min-max y previews optimizados
+// Versión: 12.0 - Con comando listagrupos
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing adaptativo (80% del delay)
@@ -10,7 +10,7 @@
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios con formato "min-max" desde CONFIG
 // - Descarga completa de agenda
-// - Comandos "actualizar" y "status" desde WhatsApp
+// - Comandos "actualizar", "status" y "listagrupos" desde WhatsApp
 // - Logs solo locales
 // ============================================
 
@@ -30,12 +30,12 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     archivo_agenda: './agenda.json',
-    tiempo_entre_mensajes_min: 1,  // valor por defecto
-    tiempo_entre_mensajes_max: 5,  // valor por defecto
+    tiempo_entre_mensajes_min: 1,
+    tiempo_entre_mensajes_max: 5,
     tiempo_typing: 3000,
     carpeta_logs: './logs',
     numero_telefono: '',
-    horarios_actualizacion: ['06:00', '18:00']  // 6am y 6pm
+    horarios_actualizacion: ['06:00', '18:00']
 };
 
 // Crear carpetas necesarias
@@ -89,9 +89,7 @@ async function consultarTodosLosGrupos(url) {
         const respuesta = await axios.get(url);
         const data = respuesta.data;
         
-        // Actualizar configuración desde Google Sheets con formato "min-max"
         if (data.config) {
-            // Buscar el valor de TIEMPO_ENTRE_MENSAJES (puede venir como string "min-max")
             const delayStr = data.config.TIEMPO_ENTRE_MENSAJES;
             if (delayStr && typeof delayStr === 'string' && delayStr.includes('-')) {
                 const partes = delayStr.split('-').map(p => parseInt(p.trim()));
@@ -103,7 +101,6 @@ async function consultarTodosLosGrupos(url) {
                     console.log(`⚠️  Formato de delay inválido: ${delayStr}, usando valores por defecto`);
                 }
             } else if (delayStr && !isNaN(parseInt(delayStr))) {
-                // Si solo es un número, usarlo como máximo y 1 como mínimo
                 const valor = parseInt(delayStr);
                 CONFIG.tiempo_entre_mensajes_min = 1;
                 CONFIG.tiempo_entre_mensajes_max = valor;
@@ -125,7 +122,6 @@ function guardarAgendaLocal(data) {
     try {
         const grupos = data.grupos || [];
         
-        // Organizar grupos por pestaña y horario rector
         const agenda = {
             ultima_actualizacion: new Date().toISOString(),
             config: {
@@ -137,7 +133,6 @@ function guardarAgendaLocal(data) {
             total: grupos.length
         };
         
-        // Agrupar por pestaña
         grupos.forEach(grupo => {
             if (!agenda.pestanas[grupo.pestana]) {
                 agenda.pestanas[grupo.pestana] = {
@@ -150,7 +145,6 @@ function guardarAgendaLocal(data) {
         
         fs.writeFileSync(CONFIG.archivo_agenda, JSON.stringify(agenda, null, 2));
         
-        // Mostrar resumen de pestañas
         console.log(`✅ Agenda guardada localmente (${grupos.length} grupos en ${Object.keys(agenda.pestanas).length} pestañas)`);
         Object.keys(agenda.pestanas).forEach(pestana => {
             const p = agenda.pestanas[pestana];
@@ -175,7 +169,6 @@ function cargarAgendaLocal() {
         }
         const agenda = JSON.parse(fs.readFileSync(CONFIG.archivo_agenda, 'utf8'));
         
-        // Actualizar configuración desde agenda
         if (agenda.config) {
             CONFIG.tiempo_entre_mensajes_min = agenda.config.min || 1;
             CONFIG.tiempo_entre_mensajes_max = agenda.config.max || 5;
@@ -237,16 +230,13 @@ function guardarLogLocal(texto) {
 // ============================================
 async function simularTyping(sock, id_destino, duracion) {
     try {
-        // Iniciar typing
         await sock.sendPresenceUpdate('composing', id_destino);
         guardarLogLocal(`   ✍️ Typing por ${duracion} segundos...`);
         
-        // Mantener typing durante casi todo el delay
         await new Promise(resolve => setTimeout(resolve, duracion * 1000));
         
-        // Detener typing justo antes de enviar
         await sock.sendPresenceUpdate('paused', id_destino);
-        await new Promise(resolve => setTimeout(resolve, 500)); // Pequeña pausa antes de enviar
+        await new Promise(resolve => setTimeout(resolve, 500));
         
     } catch (error) {
         guardarLogLocal(`   ⚠️ Error en typing: ${error.message}`);
@@ -258,18 +248,15 @@ async function simularTyping(sock, id_destino, duracion) {
 // ============================================
 async function generarLinkPreview(url) {
     try {
-        // Usar getUrlInfo de Baileys para obtener la información de la URL
-        // Con thumbnailWidth: 1200 para alta calidad
-        // Seguir redirecciones para mejorar compatibilidad
         const linkPreview = await getUrlInfo(url, {
             thumbnailWidth: 1200,
             fetchOpts: {
-                timeout: 8000, // Aumentado para dar más tiempo
+                timeout: 8000,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
             },
-            followRedirects: true // Seguir redirecciones
+            followRedirects: true
         });
         return linkPreview;
     } catch (error) {
@@ -279,7 +266,7 @@ async function generarLinkPreview(url) {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW OPTIMIZADO)
+// ENVIAR MENSAJE A GRUPO
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -287,35 +274,27 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Extraer URLs del mensaje (incluye wa.me, http, https)
         const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/)[^\s]+/g) || [];
         
-        // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
-        // Si hay URLs, generar link preview
         if (urls.length > 0) {
             guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
             
-            // Generar el preview usando getUrlInfo
             const linkPreview = await generarLinkPreview(urls[0]);
             
             if (linkPreview) {
                 opciones.linkPreview = linkPreview;
                 guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
-                
-                // Pequeño delay adicional para asegurar que Android procese el preview
                 guardarLogLocal(`   ⏱️  Esperando 1.5s para optimizar preview en Android...`);
                 await new Promise(resolve => setTimeout(resolve, 1500));
             } else {
-                // Fallback
                 opciones.linkPreview = {
                     matchedText: urls[0]
                 };
             }
         }
         
-        // Enviar mensaje con preview
         await sock.sendMessage(id_grupo, opciones);
         
         return 'ENVIADO';
@@ -325,13 +304,13 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
 }
 
 // ============================================
-// OBTENER DELAY ALEATORIO ENTRE MIN Y MAX
+// OBTENER DELAY ALEATORIO
 // ============================================
 function obtenerDelayAleatorio() {
     const min = CONFIG.tiempo_entre_mensajes_min || 1;
     const max = CONFIG.tiempo_entre_mensajes_max || 5;
     const delay = Math.floor(Math.random() * (max - min + 1) + min);
-    return delay; // Devolver en segundos
+    return delay;
 }
 
 // ============================================
@@ -350,7 +329,6 @@ async function verificarMensajesLocales(sock) {
                           ahora.getMinutes().toString().padStart(2,'0');
         const diaSemana = ['D','L','M','MI','J','V','S'][ahora.getDay()];
 
-        // Buscar pestañas cuyo horario rector coincida con la hora actual
         const pestanasAHora = [];
         
         Object.keys(agenda.pestanas || {}).forEach(nombrePestana => {
@@ -368,12 +346,10 @@ async function verificarMensajesLocales(sock) {
             return;
         }
 
-        // Procesar cada pestaña
         for (const pestana of pestanasAHora) {
             guardarLogLocal(`📊 Pestaña "${pestana.nombre}" - Enviando ${pestana.grupos.length} mensajes (horario: ${pestana.horario})`);
 
             for (const grupo of pestana.grupos) {
-                // Verificar días de la semana
                 const diasPermitidos = grupo.dias ? grupo.dias.split(',').map(d => d.trim()) : [];
                 if (diasPermitidos.length > 0 && !diasPermitidos.includes(diaSemana)) {
                     guardarLogLocal(`   ⏭️  ${grupo.nombre || grupo.id} - no corresponde hoy (días: ${grupo.dias})`);
@@ -382,16 +358,12 @@ async function verificarMensajesLocales(sock) {
 
                 guardarLogLocal(`   📤 Enviando a: ${grupo.nombre || grupo.id}`);
                 
-                // Obtener delay para este mensaje
                 const delaySegundos = obtenerDelayAleatorio();
                 
-                // SIMULAR TYPING durante casi todo el delay
-                await simularTyping(sock, grupo.id, delaySegundos * 0.8); // 80% del delay
+                await simularTyping(sock, grupo.id, delaySegundos * 0.8);
                 
-                // Enviar mensaje
                 const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
                 
-                // Esperar el resto del delay después del envío
                 const restante = delaySegundos * 0.2 * 1000;
                 await new Promise(resolve => setTimeout(resolve, restante));
                 
@@ -407,16 +379,101 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
+// NUEVA FUNCIÓN: OBTENER GRUPOS DE WHATSAPP
+// ============================================
+async function obtenerGruposWhatsApp(sock) {
+    try {
+        guardarLogLocal('🔍 Obteniendo grupos de WhatsApp...');
+        
+        // Obtener todos los grupos donde está el bot
+        const grupos = await sock.groupFetchAllParticipatingGroups();
+        
+        const listaGrupos = [];
+        
+        // Convertir a formato {id, nombre}
+        for (const [id, info] of Object.entries(grupos)) {
+            listaGrupos.push({
+                id: id,
+                nombre: info.subject || 'Sin nombre'
+            });
+        }
+        
+        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados`);
+        return listaGrupos;
+    } catch (error) {
+        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: ENVIAR GRUPOS A GOOGLE SHEETS
+// ============================================
+async function enviarGruposASheets(url_sheets, grupos) {
+    try {
+        guardarLogLocal('📤 Enviando grupos a Google Sheets...');
+        
+        // Usar la misma URL pero con POST
+        const respuesta = await axios.post(url_sheets, {
+            grupos: grupos
+        });
+        
+        if (respuesta.data && respuesta.data.success) {
+            guardarLogLocal(`✅ ${respuesta.data.mensaje}`);
+            return true;
+        } else {
+            guardarLogLocal(`⚠️ Respuesta de Sheets: ${JSON.stringify(respuesta.data)}`);
+            return false;
+        }
+    } catch (error) {
+        guardarLogLocal(`❌ Error enviando a Sheets: ${error.message}`);
+        return false;
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: GENERAR Y ENVIAR CSV
+// ============================================
+async function enviarCSVporWhatsApp(sock, remitente, grupos) {
+    try {
+        // Crear contenido CSV
+        let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
+        grupos.forEach(g => {
+            csvContent += `${g.id},${g.nombre}\n`;
+        });
+        
+        // Guardar archivo temporal
+        const csvPath = path.join(CONFIG.carpeta_logs, 'grupos_exportados.csv');
+        fs.writeFileSync(csvPath, csvContent);
+        
+        // Enviar archivo por WhatsApp
+        await sock.sendMessage(remitente, {
+            document: fs.readFileSync(csvPath),
+            fileName: 'grupos_exportados.csv',
+            mimetype: 'text/csv',
+            caption: '📎 Archivo con la lista de grupos'
+        });
+        
+        guardarLogLocal('✅ CSV enviado por WhatsApp');
+        return true;
+    } catch (error) {
+        guardarLogLocal(`❌ Error enviando CSV: ${error.message}`);
+        return false;
+    }
+}
+
+// ============================================
 // INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 11.0 (DELAY min-max, PREVIEWS OPTIMIZADOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 12.0 (CON LISTAGRUPOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews optimizados para Android');
     console.log('📝 Logs locales (carpeta logs/)\n');
+    console.log('🆕 Nuevo comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -430,9 +487,6 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
-        // ============================================
-        // CONFIGURACIÓN DEL SOCKET CON LINK PREVIEW DE ALTA CALIDAD
-        // ============================================
         const sock = makeWASocket({
             version,
             auth: state,
@@ -443,10 +497,9 @@ async function iniciarWhatsApp() {
             markOnlineOnConnect: true,
             defaultQueryTimeoutMs: 60000,
             shouldSyncHistoryMessage: () => false,
-            generateHighQualityLinkPreview: true,  // ACTIVADO para previews de alta calidad
+            generateHighQualityLinkPreview: true,
         });
 
-        // CÓDIGO DE EMPAREJAMIENTO
         if (!sock.authState.creds.registered) {
             console.log('📱 PRIMERA CONFIGURACIÓN\n');
             const numero = await pedirNumeroSilencioso();
@@ -468,7 +521,6 @@ async function iniciarWhatsApp() {
             }, 2000);
         }
 
-        // Eventos de conexión
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
@@ -476,7 +528,6 @@ async function iniciarWhatsApp() {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
                 guardarLogLocal('CONEXIÓN EXITOSA');
                 
-                // PRIMERA VEZ: Actualizar agenda inmediatamente
                 const agenda = cargarAgendaLocal();
                 if (agenda.grupos.length === 0) {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
@@ -499,9 +550,6 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // ============================================
-        // ACTUALIZACIÓN PROGRAMADA DE AGENDA (2 VECES AL DÍA)
-        // ============================================
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
             const expresionCron = `${minutos} ${horas} * * *`;
@@ -512,15 +560,12 @@ async function iniciarWhatsApp() {
             });
         });
 
-        // ============================================
-        // VERIFICACIÓN DE MENSAJES CADA MINUTO (desde agenda local)
-        // ============================================
         cron.schedule('* * * * *', async () => {
             await verificarMensajesLocales(sock);
         });
 
         // ============================================
-        // COMANDOS DESDE WHATSAPP
+        // COMANDOS DESDE WHATSAPP (INCLUYE LISTAGRUPOS)
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
@@ -529,7 +574,6 @@ async function iniciarWhatsApp() {
                 const texto = mensaje.message.conversation || 
                              mensaje.message.extendedTextMessage?.text || '';
                 
-                // Solo responder a mensajes PRIVADOS
                 if (remitente && !remitente.includes('@g.us') && texto) {
                     const cmd = texto.toLowerCase().trim();
                     
@@ -557,9 +601,42 @@ async function iniciarWhatsApp() {
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
                                       `🔗 Link Previews: OPTIMIZADOS PARA ANDROID\n` +
+                                      `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
+                    }
+                    
+                    // ============================================
+                    // NUEVO COMANDO: LISTAGRUPOS
+                    // ============================================
+                    if (cmd === 'listagrupos' || cmd === 'grupos') {
+                        guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: listagrupos`);
+                        
+                        // Responder inmediatamente que está procesando
+                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos...' });
+                        
+                        // Obtener grupos de WhatsApp
+                        const grupos = await obtenerGruposWhatsApp(sock);
+                        
+                        if (grupos.length === 0) {
+                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos o hubo un error.' });
+                            return;
+                        }
+                        
+                        // Enviar a Google Sheets (POST)
+                        const sheetsResult = await enviarGruposASheets(url_sheets, grupos);
+                        
+                        // Enviar CSV por WhatsApp
+                        const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
+                        
+                        // Mensaje de confirmación
+                        let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
+                        confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
+                        confirmacion += sheetsResult ? '✅ Guardado en Google Sheets\n' : '❌ Error en Google Sheets\n';
+                        confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
+                        
+                        await sock.sendMessage(remitente, { text: confirmacion });
                     }
                 }
             }
@@ -568,6 +645,7 @@ async function iniciarWhatsApp() {
         console.log('\n📝 Comandos disponibles en WhatsApp:');
         console.log('   - "actualizar" - Forzar descarga de agenda');
         console.log('   - "status" - Ver estado del bot');
+        console.log('   - "listagrupos" - Exportar grupos a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
