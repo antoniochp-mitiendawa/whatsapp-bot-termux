@@ -1,11 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 13.1 - Corregido para Baileys v6.7.19
+// Versión: 13.2 - Browser optimizado para Link Previews en Android
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing adaptativo (80% del delay)
 // - Link Previews con getUrlInfo() y delay post-procesamiento
 // - Alta calidad de previsualización
+// - Browser configurado como macOS/Desktop para mejor compatibilidad
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios con formato "min-max" desde CONFIG
@@ -15,7 +16,7 @@
 // - Logs solo locales
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -501,11 +502,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.1 (GRUPOS CORREGIDOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.2 (BROWSER OPTIMIZADO)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews optimizados para Android');
+    console.log('🔗 Link Previews optimizados con browser macOS/Desktop');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
 
@@ -522,12 +523,17 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
+        // ============================================
+        // CONFIGURACIÓN DEL SOCKET CON BROWSER OPTIMIZADO
+        // ============================================
         const sock = makeWASocket({
             version,
             auth: state,
             logger: logger,
             printQRInTerminal: false,
-            browser: ["Ubuntu", "Chrome", "20.0.04"],
+            // Usar Browsers.macOS("Desktop") como recomienda la documentación oficial
+            // para emular escritorio y mejorar link previews en Android [citation:2]
+            browser: Browsers.macOS("Desktop"),
             syncFullHistory: false,
             markOnlineOnConnect: true,
             defaultQueryTimeoutMs: 60000,
@@ -649,7 +655,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: OPTIMIZADOS\n` +
+                                      `🔗 Link Previews: BROWSER OPTIMIZADO\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
