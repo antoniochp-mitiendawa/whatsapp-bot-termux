@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 13.0 - Actualizado para Baileys v6.7.19+
+// Versión: 13.1 - Corregido para Baileys v6.7.19
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing adaptativo (80% del delay)
@@ -383,72 +383,51 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN ACTUALIZADA: OBTENER GRUPOS DE WHATSAPP
+// FUNCIÓN CORREGIDA PARA BAILEYS v6.7.19
 // ============================================
 async function obtenerGruposWhatsApp(sock) {
     try {
         guardarLogLocal('🔍 Obteniendo grupos de WhatsApp...');
         
-        // Verificar que el socket está conectado
         if (!sock || !sock.user) {
             guardarLogLocal('❌ Socket no conectado');
             return [];
         }
         
-        // Método 1: Usar groupFetchAllParticipatingGroups (documentado oficialmente)
-        // Este método devuelve un objeto con todos los grupos donde participa el bot
-        guardarLogLocal('   Usando groupFetchAllParticipatingGroups()...');
+        guardarLogLocal('   Consultando grupos con API v6.7.19...');
         
-        const gruposObj = await sock.groupFetchAllParticipatingGroups();
+        const gruposDict = await sock.groupFetchAllParticipatingGroups();
         
-        // Si el método falla o no existe, intentar método alternativo
-        if (!gruposObj || typeof gruposObj !== 'object') {
-            guardarLogLocal('   ⚠️ Método principal falló, intentando alternativas...');
-            
-            // Método 2: Intentar obtener grupos vía query (método más antiguo pero a veces funciona)
-            try {
-                const groups = await sock.groupQuery('participating');
-                if (groups && groups.length > 0) {
-                    const listaGrupos = groups.map(g => ({
-                        id: g.id,
-                        nombre: g.subject || 'Sin nombre'
-                    }));
-                    guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados (método alternativo)`);
-                    return listaGrupos;
-                }
-            } catch (altError) {
-                guardarLogLocal(`   ⚠️ Método alternativo falló: ${altError.message}`);
-            }
-            
+        if (!gruposDict || typeof gruposDict !== 'object') {
+            guardarLogLocal('⚠️ No se obtuvieron grupos o formato inesperado');
             return [];
         }
         
-        // Convertir objeto a array
         const listaGrupos = [];
         
-        for (const [id, info] of Object.entries(gruposObj)) {
-            // Actualizar caché
-            groupCache.set(id, info);
-            
+        for (const [groupId, groupInfo] of Object.entries(gruposDict)) {
             listaGrupos.push({
-                id: id,
-                nombre: info.subject || 'Sin nombre'
+                id: groupId,
+                nombre: groupInfo.subject || 'Sin nombre'
             });
+            
+            if (typeof groupCache !== 'undefined' && groupCache) {
+                groupCache.set(groupId, groupInfo);
+            }
         }
         
-        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados`);
+        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados correctamente`);
         return listaGrupos;
         
     } catch (error) {
         guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
         
-        // Intentar método alternativo en caso de error
         try {
-            guardarLogLocal('   Intentando método alternativo por si el error es de versión...');
+            guardarLogLocal('   Intentando método alternativo con groupMetadata...');
             
-            // Algunas versiones usan groupMetadata con array vacío
             const groups = await sock.groupMetadata('');
-            if (groups && groups.length > 0) {
+            
+            if (groups && Array.isArray(groups) && groups.length > 0) {
                 const listaGrupos = groups.map(g => ({
                     id: g.id,
                     nombre: g.subject || 'Sin nombre'
@@ -457,7 +436,7 @@ async function obtenerGruposWhatsApp(sock) {
                 return listaGrupos;
             }
         } catch (altError) {
-            guardarLogLocal(`   ❌ Método alternativo también falló: ${altError.message}`);
+            guardarLogLocal(`   ❌ Método alternativo falló: ${altError.message}`);
         }
         
         return [];
@@ -495,7 +474,6 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
     try {
         let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
         grupos.forEach(g => {
-            // Escapar comas en nombres si es necesario
             const nombreEscapado = g.nombre.includes(',') ? `"${g.nombre}"` : g.nombre;
             csvContent += `${g.id},${nombreEscapado}\n`;
         });
@@ -523,7 +501,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.0 (ACTUALIZADA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.1 (GRUPOS CORREGIDOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -555,11 +533,9 @@ async function iniciarWhatsApp() {
             defaultQueryTimeoutMs: 60000,
             shouldSyncHistoryMessage: () => false,
             generateHighQualityLinkPreview: true,
-            // Configurar caché de grupos como recomienda la documentación
             cachedGroupMetadata: async (jid) => groupCache.get(jid)
         });
 
-        // Actualizar caché cuando cambien los grupos
         sock.ev.on('groups.update', async (updates) => {
             for (const update of updates) {
                 try {
