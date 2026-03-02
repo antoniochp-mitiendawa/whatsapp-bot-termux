@@ -15,6 +15,7 @@ echo " PASO 2: Descargando el bot..."
 
 # Intento 1: Con git clone normal
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
+sleep 2
 
 # Si falla, intentamos con wget y zip
 if [ $? -ne 0 ]; then
@@ -25,6 +26,9 @@ if [ $? -ne 0 ]; then
   unzip main.zip
   mv whatsapp-bot-termux-main whatsapp-bot-termux
 fi
+
+# Esperar un momento antes de continuar
+sleep 2
 
 # Entrar a la carpeta
 cd whatsapp-bot-termux
