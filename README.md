@@ -2,8 +2,12 @@
 
 ## 📱 ¿Qué necesitas?
 - Celular Android
-- Termux instalado (desde F-Droid, NO desde Play Store)
-- Tu hoja de Google Sheets con el código que ya hicimos
-- La URL de tu hoja (la que copiaste)
+- Termux instalado (desde F-Droid)
+- Tu URL de Google Sheets (la del menú "Obtener URL")
 
-## 🚀 Instalación (paso a paso)
+## 🚀 INSTALACIÓN EN UN SOLO PASO
+
+**Abre Termux y copia ESTE ÚNICO COMANDO:**
+
+```bash
+pkg install wget -y && wget -O - https://raw.githubusercontent.com/TU-USUARIO/whatsapp-bot-termux/main/start.sh | bash
