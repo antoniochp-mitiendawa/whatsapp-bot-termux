@@ -1,74 +1,22 @@
-#!/bin/bash
+# 🤖 WhatsApp Bot para Termux - Versión Final
 
-echo "===================================="
-echo "🚀 INSTALADOR WHATSAPP BOT"
-echo "===================================="
-echo ""
+## 📱 Características
+- ✅ Conexión con código de emparejamiento (sin QR)
+- ✅ Typing automático (simula escritura humana)
+- ✅ Link Previews para URLs (Facebook, YouTube, etc.)
+- ✅ Verificaciones automáticas CADA 12 HORAS (8am y 8pm)
+- ✅ Comando manual "verificar" para envíos inmediatos
+- ✅ Logs locales (no satura Google Sheets)
+- ✅ Envío a grupos según hora y día programados
 
-# PASO 1: Instalar lo básico
-echo " PASO 1: Instalando programas necesarios..."
-pkg update -y
-pkg install git -y
-pkg install nodejs -y
-pkg install yarn -y
+## 📋 Requisitos
+- Celular Android
+- Termux instalado (desde F-Droid)
+- Google Sheets con el script incluido
 
-# PASO 2: Clonar el repositorio
-echo " PASO 2: Descargando el bot..."
-git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
-cd whatsapp-bot-termux
+## 🚀 INSTALACIÓN EN UN SOLO PASO
 
-# PASO 3: Guardar la URL en un archivo temporal
-echo ""
-echo "===================================="
-echo "🔗 URL DE GOOGLE SHEETS"
-echo "===================================="
-echo "1. Abre Google Sheets"
-echo "2. En el menú 'Control WhatsApp'"
-echo "3. Ve a '📚 Ver Instrucciones'"
-echo "4. Copia la URL que aparece en el recuadro azul"
-echo "===================================="
-echo ""
-echo "📝 Escribe la URL y presiona Enter:"
-read USER_URL
-echo $USER_URL > url_sheets.txt
+**Abre Termux y copia ESTE ÚNICO COMANDO:**
 
-# PASO 4: Instalar dependencias
-echo ""
-echo " PASO 3: Instalando librerías..."
-cd whatsapp-bot
-npm init -y
-npm install @whiskeysockets/baileys
-npm install @hapi/boom
-npm install qrcode-terminal
-npm install node-cron
-npm install axios
-npm install pino
-
-echo ""
-echo "===================================="
-echo "✅ INSTALACIÓN COMPLETA"
-echo "===================================="
-echo ""
-
-# PASO 5: PREGUNTAR SI QUIERE INICIAR AHORA
-echo "🤖 El bot ya está instalado"
-echo ""
-echo "¿Quieres iniciar el bot AHORA?"
-echo "Escribe 1 y presiona Enter para INICIAR"
-echo "Escribe 2 y presiona Enter para SALIR"
-echo ""
-read OPCION
-
-if [ "$OPCION" == "1" ]; then
-    echo ""
-    echo "🚀 INICIANDO BOT..."
-    echo "======================"
-    echo ""
-    node bot.js
-else
-    echo ""
-    echo "📝 Para iniciar el bot después:"
-    echo "cd whatsapp-bot-termux/whatsapp-bot"
-    echo "node bot.js"
-    echo ""
-fi
+```bash
+pkg install wget -y && wget -O instalar.sh https://raw.githubusercontent.com/antoniochp-mitiendawa/whatsapp-bot-termux/main/instalar.sh && chmod +x instalar.sh && ./instalar.sh
