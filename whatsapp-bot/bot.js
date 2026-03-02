@@ -1,14 +1,14 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 10.0 - Link Previews CORREGIDOS para Android
+// Versión: 11.0 - Delay formato min-max y previews optimizados
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing adaptativo (80% del delay)
-// - Link Previews forzados con getUrlInfo()
+// - Link Previews con getUrlInfo() y delay post-procesamiento
 // - Alta calidad de previsualización
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
-// - Delays aleatorios entre mensajes (mín/máx desde CONFIG)
+// - Delays aleatorios con formato "min-max" desde CONFIG
 // - Descarga completa de agenda
 // - Comandos "actualizar" y "status" desde WhatsApp
 // - Logs solo locales
@@ -30,7 +30,7 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     archivo_agenda: './agenda.json',
-    tiempo_entre_mensajes_min: 2,  // valor por defecto (se actualiza desde Google Sheets)
+    tiempo_entre_mensajes_min: 1,  // valor por defecto
     tiempo_entre_mensajes_max: 5,  // valor por defecto
     tiempo_typing: 3000,
     carpeta_logs: './logs',
@@ -89,15 +89,26 @@ async function consultarTodosLosGrupos(url) {
         const respuesta = await axios.get(url);
         const data = respuesta.data;
         
-        // Actualizar configuración desde Google Sheets
+        // Actualizar configuración desde Google Sheets con formato "min-max"
         if (data.config) {
-            if (data.config.TIEMPO_ENTRE_MENSAJES_MIN) {
-                CONFIG.tiempo_entre_mensajes_min = parseInt(data.config.TIEMPO_ENTRE_MENSAJES_MIN) || 2;
+            // Buscar el valor de TIEMPO_ENTRE_MENSAJES (puede venir como string "min-max")
+            const delayStr = data.config.TIEMPO_ENTRE_MENSAJES;
+            if (delayStr && typeof delayStr === 'string' && delayStr.includes('-')) {
+                const partes = delayStr.split('-').map(p => parseInt(p.trim()));
+                if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
+                    CONFIG.tiempo_entre_mensajes_min = partes[0];
+                    CONFIG.tiempo_entre_mensajes_max = partes[1];
+                    console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (formato min-max)`);
+                } else {
+                    console.log(`⚠️  Formato de delay inválido: ${delayStr}, usando valores por defecto`);
+                }
+            } else if (delayStr && !isNaN(parseInt(delayStr))) {
+                // Si solo es un número, usarlo como máximo y 1 como mínimo
+                const valor = parseInt(delayStr);
+                CONFIG.tiempo_entre_mensajes_min = 1;
+                CONFIG.tiempo_entre_mensajes_max = valor;
+                console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (convertido desde valor único)`);
             }
-            if (data.config.TIEMPO_ENTRE_MENSAJES_MAX) {
-                CONFIG.tiempo_entre_mensajes_max = parseInt(data.config.TIEMPO_ENTRE_MENSAJES_MAX) || 5;
-            }
-            console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos`);
         }
         
         return data;
@@ -166,7 +177,7 @@ function cargarAgendaLocal() {
         
         // Actualizar configuración desde agenda
         if (agenda.config) {
-            CONFIG.tiempo_entre_mensajes_min = agenda.config.min || 2;
+            CONFIG.tiempo_entre_mensajes_min = agenda.config.min || 1;
             CONFIG.tiempo_entre_mensajes_max = agenda.config.max || 5;
         }
         
@@ -243,17 +254,22 @@ async function simularTyping(sock, id_destino, duracion) {
 }
 
 // ============================================
-// FUNCIÓN PARA GENERAR LINK PREVIEW (NUEVA)
+// FUNCIÓN PARA GENERAR LINK PREVIEW
 // ============================================
 async function generarLinkPreview(url) {
     try {
         // Usar getUrlInfo de Baileys para obtener la información de la URL
-        // Con thumbnailWidth: 1200 para alta calidad [citation:2]
+        // Con thumbnailWidth: 1200 para alta calidad
+        // Seguir redirecciones para mejorar compatibilidad
         const linkPreview = await getUrlInfo(url, {
             thumbnailWidth: 1200,
             fetchOpts: {
-                timeout: 5000,
+                timeout: 8000, // Aumentado para dar más tiempo
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
             },
+            followRedirects: true // Seguir redirecciones
         });
         return linkPreview;
     } catch (error) {
@@ -263,7 +279,7 @@ async function generarLinkPreview(url) {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW CORREGIDO)
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW OPTIMIZADO)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -271,13 +287,13 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Extraer URLs del mensaje
-        const urls = mensaje.match(/https?:\/\/[^\s]+/g) || [];
+        // Extraer URLs del mensaje (incluye wa.me, http, https)
+        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/)[^\s]+/g) || [];
         
         // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
-        // Si hay URLs, generar link preview correctamente [citation:2]
+        // Si hay URLs, generar link preview
         if (urls.length > 0) {
             guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
             
@@ -287,8 +303,12 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             if (linkPreview) {
                 opciones.linkPreview = linkPreview;
                 guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
+                
+                // Pequeño delay adicional para asegurar que Android procese el preview
+                guardarLogLocal(`   ⏱️  Esperando 1.5s para optimizar preview en Android...`);
+                await new Promise(resolve => setTimeout(resolve, 1500));
             } else {
-                // Fallback al método anterior
+                // Fallback
                 opciones.linkPreview = {
                     matchedText: urls[0]
                 };
@@ -305,10 +325,10 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
 }
 
 // ============================================
-// OBTENER DELAY ALEATORIO
+// OBTENER DELAY ALEATORIO ENTRE MIN Y MAX
 // ============================================
 function obtenerDelayAleatorio() {
-    const min = CONFIG.tiempo_entre_mensajes_min || 2;
+    const min = CONFIG.tiempo_entre_mensajes_min || 1;
     const max = CONFIG.tiempo_entre_mensajes_max || 5;
     const delay = Math.floor(Math.random() * (max - min + 1) + min);
     return delay; // Devolver en segundos
@@ -391,11 +411,11 @@ async function verificarMensajesLocales(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 10.0 (PREVIEWS CORREGIDOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 11.0 (DELAY min-max, PREVIEWS OPTIMIZADOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews de alta calidad');
+    console.log('🔗 Link Previews optimizados para Android');
     console.log('📝 Logs locales (carpeta logs/)\n');
 
     const url_sheets = leerURL();
@@ -411,7 +431,7 @@ async function iniciarWhatsApp() {
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
         // ============================================
-        // CONFIGURACIÓN DEL SOCKET CON LINK PREVIEW DE ALTA CALIDAD [citation:2]
+        // CONFIGURACIÓN DEL SOCKET CON LINK PREVIEW DE ALTA CALIDAD
         // ============================================
         const sock = makeWASocket({
             version,
@@ -423,7 +443,7 @@ async function iniciarWhatsApp() {
             markOnlineOnConnect: true,
             defaultQueryTimeoutMs: 60000,
             shouldSyncHistoryMessage: () => false,
-            generateHighQualityLinkPreview: true,  // ACTIVADO para previews de alta calidad [citation:4]
+            generateHighQualityLinkPreview: true,  // ACTIVADO para previews de alta calidad
         });
 
         // CÓDIGO DE EMPAREJAMIENTO
@@ -536,7 +556,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: ALTA CALIDAD\n` +
+                                      `🔗 Link Previews: OPTIMIZADOS PARA ANDROID\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
