@@ -1,13 +1,14 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 6.0 - Con agenda local
+// Versión: 7.0 - Con descarga completa de agenda
 // Características:
 // - Conexión con código de emparejamiento
 // - Typing automático
 // - Link Previews activados
-// - Agenda local (grupos, mensajes, horas)
+// - Descarga TODOS los grupos de Google Sheets
+// - Agenda local con todos los datos
 // - Consulta a Google Sheets SOLO al inicio y cada 12h
-// - Comando desde WhatsApp para actualizar
+// - Comando "actualizar" desde WhatsApp
 // - Logs solo locales
 // ============================================
 
@@ -26,7 +27,7 @@ const pino = require('pino');
 const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
-    archivo_agenda: './agenda.json',        // Archivo local con toda la programación
+    archivo_agenda: './agenda.json',
     tiempo_entre_mensajes: 5000,
     tiempo_typing: 3000,
     carpeta_logs: './logs',
@@ -78,12 +79,13 @@ function pedirNumeroSilencioso() {
 }
 
 // ============================================
-// CONSULTAR TODA LA PROGRAMACIÓN A GOOGLE SHEETS
+// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS
 // ============================================
-async function consultarProgramacionCompleta(url) {
+async function consultarTodosLosGrupos(url) {
     try {
-        console.log('🔄 Consultando programación completa a Google Sheets...');
-        const respuesta = await axios.get(url);
+        console.log('🔄 Descargando TODOS los grupos desde Google Sheets...');
+        // Agregamos ?tipo=completa a la URL
+        const respuesta = await axios.get(url + '?tipo=completa');
         return respuesta.data;
     } catch (error) {
         console.error('❌ Error al consultar Google Sheets:', error.message);
@@ -92,17 +94,21 @@ async function consultarProgramacionCompleta(url) {
 }
 
 // ============================================
-// GUARDAR AGENDA LOCAL
+// GUARDAR AGENDA LOCAL (TODOS LOS GRUPOS)
 // ============================================
 function guardarAgendaLocal(data) {
     try {
-        // Si no hay pendientes, agenda vacía
+        // Verificar que data tenga grupos
+        const grupos = data.grupos || [];
+        
         const agenda = {
             ultima_actualizacion: new Date().toISOString(),
-            mensajes: data.pendientes || []
+            grupos: grupos,
+            total: grupos.length
         };
+        
         fs.writeFileSync(CONFIG.archivo_agenda, JSON.stringify(agenda, null, 2));
-        console.log(`✅ Agenda guardada localmente (${agenda.mensajes.length} mensajes)`);
+        console.log(`✅ Agenda guardada localmente (${grupos.length} grupos)`);
         return true;
     } catch (error) {
         console.error('❌ Error guardando agenda:', error.message);
@@ -117,14 +123,14 @@ function cargarAgendaLocal() {
     try {
         if (!fs.existsSync(CONFIG.archivo_agenda)) {
             console.log('📁 No hay agenda local (primera vez)');
-            return { mensajes: [] };
+            return { grupos: [], total: 0 };
         }
         const agenda = JSON.parse(fs.readFileSync(CONFIG.archivo_agenda, 'utf8'));
-        console.log(`📋 Agenda cargada (${agenda.mensajes.length} mensajes)`);
+        console.log(`📋 Agenda cargada (${agenda.grupos?.length || 0} grupos)`);
         return agenda;
     } catch (error) {
         console.error('❌ Error cargando agenda:', error.message);
-        return { mensajes: [] };
+        return { grupos: [], total: 0 };
     }
 }
 
@@ -135,15 +141,26 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
         guardarLogLocal(`🔄 Actualizando agenda (${origen})...`);
         
-        const data = await consultarProgramacionCompleta(url_sheets);
+        const data = await consultarTodosLosGrupos(url_sheets);
         
         if (!data) {
             guardarLogLocal('⚠️ No se pudo conectar con Google Sheets');
             return false;
         }
         
+        if (data.error) {
+            guardarLogLocal(`⚠️ Error en Sheets: ${data.error}`);
+            return false;
+        }
+        
         if (guardarAgendaLocal(data)) {
-            guardarLogLocal(`✅ Agenda actualizada: ${data.pendientes?.length || 0} mensajes`);
+            const total = data.grupos?.length || 0;
+            guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en total`);
+            
+            // Mostrar resumen de grupos activos
+            const activos = data.grupos?.filter(g => g.activo === 'SI').length || 0;
+            guardarLogLocal(`   Activos: ${activos} | Inactivos: ${total - activos}`);
+            
             return true;
         }
         return false;
@@ -170,7 +187,7 @@ function guardarLogLocal(texto) {
 async function simularTyping(sock, id_destino) {
     try {
         await sock.sendPresenceUpdate('composing', id_destino);
-        const tiempoTyping = Math.floor(Math.random() * 2000) + 2000;
+        const tiempoTyping = Math.floor(Math.random() * 2000) + 2000; // 2-4 segundos
         await new Promise(resolve => setTimeout(resolve, tiempoTyping));
         await sock.sendPresenceUpdate('paused', id_destino);
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -201,7 +218,7 @@ async function verificarMensajesLocales(sock) {
     try {
         const agenda = cargarAgendaLocal();
         
-        if (!agenda.mensajes || agenda.mensajes.length === 0) {
+        if (!agenda.grupos || agenda.grupos.length === 0) {
             return;
         }
 
@@ -210,20 +227,30 @@ async function verificarMensajesLocales(sock) {
                           ahora.getMinutes().toString().padStart(2,'0');
         const diaSemana = ['D','L','M','MI','J','V','S'][ahora.getDay()];
 
-        // Buscar mensajes que coincidan con hora actual
-        const mensajesAHora = agenda.mensajes.filter(msg => {
-            return msg.hora === horaActual;
+        // Buscar grupos activos que coincidan con hora actual y día
+        const gruposAHora = agenda.grupos.filter(grupo => {
+            // Verificar activo
+            if (grupo.activo !== 'SI') return false;
+            
+            // Verificar hora
+            if (grupo.hora !== horaActual) return false;
+            
+            // Verificar días
+            const diasPermitidos = grupo.dias ? grupo.dias.split(',').map(d => d.trim()) : [];
+            if (diasPermitidos.length > 0 && !diasPermitidos.includes(diaSemana)) return false;
+            
+            return true;
         });
 
-        if (mensajesAHora.length === 0) {
+        if (gruposAHora.length === 0) {
             return;
         }
 
-        guardarLogLocal(`📊 Enviando ${mensajesAHora.length} mensajes programados para las ${horaActual}`);
+        guardarLogLocal(`📊 Enviando ${gruposAHora.length} mensajes programados para las ${horaActual}`);
 
-        for (const msg of mensajesAHora) {
-            guardarLogLocal(`📤 Enviando a: ${msg.nombre || msg.id}`);
-            const estado = await enviarMensaje(sock, msg.id, msg.mensaje);
+        for (const grupo of gruposAHora) {
+            guardarLogLocal(`📤 Enviando a: ${grupo.nombre || grupo.id}`);
+            const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
             guardarLogLocal(`   Resultado: ${estado}`);
             await new Promise(resolve => setTimeout(resolve, CONFIG.tiempo_entre_mensajes));
         }
@@ -238,7 +265,7 @@ async function verificarMensajesLocales(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN CON AGENDA LOCAL');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN AGENDA COMPLETA');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing activado');
@@ -301,9 +328,11 @@ async function iniciarWhatsApp() {
                 
                 // PRIMERA VEZ: Actualizar agenda inmediatamente
                 const agenda = cargarAgendaLocal();
-                if (agenda.mensajes.length === 0) {
-                    guardarLogLocal('📥 Primera ejecución - cargando agenda...');
+                if (agenda.grupos.length === 0) {
+                    guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
+                } else {
+                    guardarLogLocal(`📋 Agenda existente con ${agenda.grupos.length} grupos`);
                 }
             }
 
@@ -365,13 +394,25 @@ async function iniciarWhatsApp() {
                             await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
                         }
                     }
+                    
+                    if (cmd === 'status' || cmd === 'estado') {
+                        const agenda = cargarAgendaLocal();
+                        const total = agenda.grupos?.length || 0;
+                        const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                        const mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                      `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                      `📋 Grupos totales: ${total}\n` +
+                                      `✅ Grupos activos: ${activos}\n` +
+                                      `⏰ Próxima actualización: 6am/6pm`;
+                        await sock.sendMessage(remitente, { text: mensaje });
+                    }
                 }
             }
         });
 
-        console.log('\n📝 Comandos disponibles:');
-        console.log('   - En WhatsApp, escribe "actualizar" al bot');
-        console.log('   - El bot actualizará su agenda inmediatamente');
+        console.log('\n📝 Comandos disponibles en WhatsApp:');
+        console.log('   - "actualizar" - Forzar descarga de agenda');
+        console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
@@ -393,7 +434,7 @@ process.on('SIGINT', () => {
 // INICIAR
 // ============================================
 console.log('====================================');
-console.log('🚀 SISTEMA DE MENSAJES CON AGENDA LOCAL');
+console.log('🚀 SISTEMA DE MENSAJES CON AGENDA COMPLETA');
 console.log('====================================\n');
 
 iniciarWhatsApp().catch(error => {
