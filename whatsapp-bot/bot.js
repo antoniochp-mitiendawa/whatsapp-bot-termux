@@ -1,14 +1,15 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 7.0 - Con descarga completa de agenda
+// Versión: 8.0 - Múltiples pestañas y delays aleatorios
 // Características:
 // - Conexión con código de emparejamiento
-// - Typing automático
+// - Typing automático (simula escritura)
 // - Link Previews activados
-// - Descarga TODOS los grupos de Google Sheets
-// - Agenda local con todos los datos
-// - Consulta a Google Sheets SOLO al inicio y cada 12h
-// - Comando "actualizar" desde WhatsApp
+// - Múltiples pestañas GRUPOS*, GRUPOS1*, etc.
+// - Cada pestaña tiene su propio horario rector
+// - Delays aleatorios entre mensajes (mín/máx desde CONFIG)
+// - Descarga completa de agenda
+// - Comandos "actualizar" y "status" desde WhatsApp
 // - Logs solo locales
 // ============================================
 
@@ -28,11 +29,11 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     archivo_agenda: './agenda.json',
-    tiempo_entre_mensajes: 5000,
+    tiempo_entre_mensajes_min: 2,  // valor por defecto (se actualiza desde Google Sheets)
+    tiempo_entre_mensajes_max: 5,  // valor por defecto
     tiempo_typing: 3000,
     carpeta_logs: './logs',
     numero_telefono: '',
-    // Horarios de actualización de agenda (consultas a Google Sheets)
     horarios_actualizacion: ['06:00', '18:00']  // 6am y 6pm
 };
 
@@ -84,9 +85,21 @@ function pedirNumeroSilencioso() {
 async function consultarTodosLosGrupos(url) {
     try {
         console.log('🔄 Descargando TODOS los grupos desde Google Sheets...');
-        // Agregamos ?tipo=completa a la URL
-        const respuesta = await axios.get(url + '?tipo=completa');
-        return respuesta.data;
+        const respuesta = await axios.get(url);
+        const data = respuesta.data;
+        
+        // Actualizar configuración desde Google Sheets
+        if (data.config) {
+            if (data.config.TIEMPO_ENTRE_MENSAJES_MIN) {
+                CONFIG.tiempo_entre_mensajes_min = parseInt(data.config.TIEMPO_ENTRE_MENSAJES_MIN) || 2;
+            }
+            if (data.config.TIEMPO_ENTRE_MENSAJES_MAX) {
+                CONFIG.tiempo_entre_mensajes_max = parseInt(data.config.TIEMPO_ENTRE_MENSAJES_MAX) || 5;
+            }
+            console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos`);
+        }
+        
+        return data;
     } catch (error) {
         console.error('❌ Error al consultar Google Sheets:', error.message);
         return null;
@@ -94,21 +107,44 @@ async function consultarTodosLosGrupos(url) {
 }
 
 // ============================================
-// GUARDAR AGENDA LOCAL (TODOS LOS GRUPOS)
+// GUARDAR AGENDA LOCAL
 // ============================================
 function guardarAgendaLocal(data) {
     try {
-        // Verificar que data tenga grupos
         const grupos = data.grupos || [];
         
+        // Organizar grupos por pestaña y horario rector
         const agenda = {
             ultima_actualizacion: new Date().toISOString(),
+            config: {
+                min: CONFIG.tiempo_entre_mensajes_min,
+                max: CONFIG.tiempo_entre_mensajes_max
+            },
+            pestanas: {},
             grupos: grupos,
             total: grupos.length
         };
         
+        // Agrupar por pestaña
+        grupos.forEach(grupo => {
+            if (!agenda.pestanas[grupo.pestana]) {
+                agenda.pestanas[grupo.pestana] = {
+                    horario: grupo.horario_rector,
+                    grupos: []
+                };
+            }
+            agenda.pestanas[grupo.pestana].grupos.push(grupo);
+        });
+        
         fs.writeFileSync(CONFIG.archivo_agenda, JSON.stringify(agenda, null, 2));
-        console.log(`✅ Agenda guardada localmente (${grupos.length} grupos)`);
+        
+        // Mostrar resumen de pestañas
+        console.log(`✅ Agenda guardada localmente (${grupos.length} grupos en ${Object.keys(agenda.pestanas).length} pestañas)`);
+        Object.keys(agenda.pestanas).forEach(pestana => {
+            const p = agenda.pestanas[pestana];
+            console.log(`   📌 ${pestana}: ${p.grupos.length} grupos - Horario: ${p.horario || 'N/A'}`);
+        });
+        
         return true;
     } catch (error) {
         console.error('❌ Error guardando agenda:', error.message);
@@ -123,19 +159,26 @@ function cargarAgendaLocal() {
     try {
         if (!fs.existsSync(CONFIG.archivo_agenda)) {
             console.log('📁 No hay agenda local (primera vez)');
-            return { grupos: [], total: 0 };
+            return { grupos: [], pestanas: {}, total: 0 };
         }
         const agenda = JSON.parse(fs.readFileSync(CONFIG.archivo_agenda, 'utf8'));
+        
+        // Actualizar configuración desde agenda
+        if (agenda.config) {
+            CONFIG.tiempo_entre_mensajes_min = agenda.config.min || 2;
+            CONFIG.tiempo_entre_mensajes_max = agenda.config.max || 5;
+        }
+        
         console.log(`📋 Agenda cargada (${agenda.grupos?.length || 0} grupos)`);
         return agenda;
     } catch (error) {
         console.error('❌ Error cargando agenda:', error.message);
-        return { grupos: [], total: 0 };
+        return { grupos: [], pestanas: {}, total: 0 };
     }
 }
 
 // ============================================
-// ACTUALIZAR AGENDA DESDE GOOGLE SHEETS
+// ACTUALIZAR AGENDA
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
@@ -155,12 +198,8 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
         
         if (guardarAgendaLocal(data)) {
             const total = data.grupos?.length || 0;
-            guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en total`);
-            
-            // Mostrar resumen de grupos activos
-            const activos = data.grupos?.filter(g => g.activo === 'SI').length || 0;
-            guardarLogLocal(`   Activos: ${activos} | Inactivos: ${total - activos}`);
-            
+            const pestanas = data.pestanas?.length || 0;
+            guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en ${pestanas} pestañas`);
             return true;
         }
         return false;
@@ -191,11 +230,13 @@ async function simularTyping(sock, id_destino) {
         await new Promise(resolve => setTimeout(resolve, tiempoTyping));
         await sock.sendPresenceUpdate('paused', id_destino);
         await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (error) {}
+    } catch (error) {
+        // Si falla el typing, continuamos
+    }
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -203,8 +244,12 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
+        // Simular que está escribiendo
         await simularTyping(sock, id_grupo);
+        
+        // Enviar mensaje con link preview automático
         await sock.sendMessage(id_grupo, { text: mensaje });
+        
         return 'ENVIADO';
     } catch (error) {
         return 'ERROR: ' + error.message.substring(0, 50);
@@ -212,7 +257,17 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
 }
 
 // ============================================
-// VERIFICAR MENSAJES PENDIENTES (DESDE AGENDA LOCAL)
+// OBTENER DELAY ALEATORIO
+// ============================================
+function obtenerDelayAleatorio() {
+    const min = CONFIG.tiempo_entre_mensajes_min || 2;
+    const max = CONFIG.tiempo_entre_mensajes_max || 5;
+    const delay = Math.floor(Math.random() * (max - min + 1) + min);
+    return delay * 1000; // Convertir a milisegundos
+}
+
+// ============================================
+// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA
 // ============================================
 async function verificarMensajesLocales(sock) {
     try {
@@ -227,32 +282,47 @@ async function verificarMensajesLocales(sock) {
                           ahora.getMinutes().toString().padStart(2,'0');
         const diaSemana = ['D','L','M','MI','J','V','S'][ahora.getDay()];
 
-        // Buscar grupos activos que coincidan con hora actual y día
-        const gruposAHora = agenda.grupos.filter(grupo => {
-            // Verificar activo
-            if (grupo.activo !== 'SI') return false;
-            
-            // Verificar hora
-            if (grupo.hora !== horaActual) return false;
-            
-            // Verificar días
-            const diasPermitidos = grupo.dias ? grupo.dias.split(',').map(d => d.trim()) : [];
-            if (diasPermitidos.length > 0 && !diasPermitidos.includes(diaSemana)) return false;
-            
-            return true;
+        // Buscar pestañas cuyo horario rector coincida con la hora actual
+        const pestanasAHora = [];
+        
+        Object.keys(agenda.pestanas || {}).forEach(nombrePestana => {
+            const pestana = agenda.pestanas[nombrePestana];
+            if (pestana.horario === horaActual) {
+                pestanasAHora.push({
+                    nombre: nombrePestana,
+                    horario: pestana.horario,
+                    grupos: pestana.grupos.filter(g => g.activo === 'SI')
+                });
+            }
         });
 
-        if (gruposAHora.length === 0) {
+        if (pestanasAHora.length === 0) {
             return;
         }
 
-        guardarLogLocal(`📊 Enviando ${gruposAHora.length} mensajes programados para las ${horaActual}`);
+        // Procesar cada pestaña
+        for (const pestana of pestanasAHora) {
+            guardarLogLocal(`📊 Pestaña "${pestana.nombre}" - Enviando ${pestana.grupos.length} mensajes (horario: ${pestana.horario})`);
 
-        for (const grupo of gruposAHora) {
-            guardarLogLocal(`📤 Enviando a: ${grupo.nombre || grupo.id}`);
-            const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
-            guardarLogLocal(`   Resultado: ${estado}`);
-            await new Promise(resolve => setTimeout(resolve, CONFIG.tiempo_entre_mensajes));
+            for (const grupo of pestana.grupos) {
+                // Verificar días de la semana
+                const diasPermitidos = grupo.dias ? grupo.dias.split(',').map(d => d.trim()) : [];
+                if (diasPermitidos.length > 0 && !diasPermitidos.includes(diaSemana)) {
+                    guardarLogLocal(`   ⏭️  ${grupo.nombre || grupo.id} - no corresponde hoy (días: ${grupo.dias})`);
+                    continue;
+                }
+
+                guardarLogLocal(`   📤 Enviando a: ${grupo.nombre || grupo.id}`);
+                
+                const delay = obtenerDelayAleatorio();
+                guardarLogLocal(`      Delay: ${delay/1000} segundos`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                
+                const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
+                guardarLogLocal(`      Resultado: ${estado}`);
+            }
+            
+            guardarLogLocal(`✅ Pestaña "${pestana.nombre}" completada`);
         }
 
     } catch (error) {
@@ -265,7 +335,7 @@ async function verificarMensajesLocales(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN AGENDA COMPLETA');
+    console.log('🤖 BOT WHATSAPP - MÚLTIPLES PESTAÑAS');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing activado');
@@ -331,8 +401,6 @@ async function iniciarWhatsApp() {
                 if (agenda.grupos.length === 0) {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
-                } else {
-                    guardarLogLocal(`📋 Agenda existente con ${agenda.grupos.length} grupos`);
                 }
             }
 
@@ -381,7 +449,7 @@ async function iniciarWhatsApp() {
                 const texto = mensaje.message.conversation || 
                              mensaje.message.extendedTextMessage?.text || '';
                 
-                // Solo responder a mensajes PRIVADOS (no de grupos)
+                // Solo responder a mensajes PRIVADOS
                 if (remitente && !remitente.includes('@g.us') && texto) {
                     const cmd = texto.toLowerCase().trim();
                     
@@ -398,12 +466,17 @@ async function iniciarWhatsApp() {
                     if (cmd === 'status' || cmd === 'estado') {
                         const agenda = cargarAgendaLocal();
                         const total = agenda.grupos?.length || 0;
+                        const pestanas = Object.keys(agenda.pestanas || {}).length;
                         const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                        const mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                        
+                        let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
                                       `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                       `📋 Grupos totales: ${total}\n` +
                                       `✅ Grupos activos: ${activos}\n` +
+                                      `📌 Pestañas: ${pestanas}\n` +
+                                      `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
+                        
                         await sock.sendMessage(remitente, { text: mensaje });
                     }
                 }
@@ -434,7 +507,7 @@ process.on('SIGINT', () => {
 // INICIAR
 // ============================================
 console.log('====================================');
-console.log('🚀 SISTEMA DE MENSAJES CON AGENDA COMPLETA');
+console.log('🚀 SISTEMA DE MENSAJES MULTI-PESTAÑA');
 console.log('====================================\n');
 
 iniciarWhatsApp().catch(error => {
