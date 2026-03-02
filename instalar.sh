@@ -23,9 +23,9 @@ echo "===================================="
 echo "🔗 URL DE GOOGLE SHEETS"
 echo "===================================="
 echo "1. Abre Google Sheets"
-echo "2. Menú 'Control WhatsApp'"
-echo "3. Haz clic en 'Obtener URL'"
-echo "4. Copia la URL"
+echo "2. En el menú 'Control WhatsApp'"
+echo "3. Ve a '📚 Ver Instrucciones'"
+echo "4. Copia la URL que aparece en el recuadro azul"
 echo "===================================="
 echo ""
 echo "📝 Escribe la URL y presiona Enter:"
@@ -64,7 +64,6 @@ if [ "$OPCION" == "1" ]; then
     echo "🚀 INICIANDO BOT..."
     echo "======================"
     echo ""
-    cd whatsapp-bot
     node bot.js
 else
     echo ""
