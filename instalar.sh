@@ -38,9 +38,19 @@ echo " PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
 npm install @whiskeysockets/baileys
+npm install @hapi/boom
 npm install qrcode-terminal
 npm install node-cron
 npm install axios
+
+# PASO 5: Verificar que bot.js existe
+echo ""
+echo " PASO 4: Verificando archivos..."
+if [ -f "bot.js" ]; then
+    echo "✅ bot.js encontrado"
+else
+    echo "⚠️ bot.js no encontrado, pero continuamos"
+fi
 
 echo ""
 echo "===================================="
@@ -50,4 +60,7 @@ echo ""
 echo "Para iniciar el bot:"
 echo "cd whatsapp-bot-termux/whatsapp-bot"
 echo "node bot.js"
+echo ""
+echo "La primera vez te pedirá tu número de teléfono"
+echo "Luego te dará un código para vincular WhatsApp"
 echo ""
