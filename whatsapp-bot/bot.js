@@ -1,12 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 13.3 - Browser inteligente (Ubuntu para pairing, macOS para sesión)
+// Versión: 14.0 - Link Previews con metadatos reales (link-preview-js)
 // Características:
 // - Conexión con código de emparejamiento
-// - Browser adaptativo: Ubuntu para primera vez, macOS para sesiones existentes
+// - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
-// - Link Previews con getUrlInfo() y delay post-procesamiento
-// - Alta calidad de previsualización
+// - Link Previews con extracción real de metadatos usando link-preview-js
+// - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios con formato "min-max" desde CONFIG
@@ -16,7 +16,7 @@
 // - Logs solo locales
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -24,6 +24,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const readline = require('readline');
 const pino = require('pino');
+const { getLinkPreview } = require('link-preview-js');
 
 // ============================================
 // CONFIGURACIÓN
@@ -249,29 +250,74 @@ async function simularTyping(sock, id_destino, duracion) {
 }
 
 // ============================================
-// FUNCIÓN PARA GENERAR LINK PREVIEW
+// FUNCIÓN PARA GENERAR LINK PREVIEW CON LINK-PREVIEW-JS
 // ============================================
-async function generarLinkPreview(url) {
+async function generarLinkPreviewConMetadatos(url) {
     try {
-        const linkPreview = await getUrlInfo(url, {
-            thumbnailWidth: 2400, // Aumentado para mejor calidad
-            fetchOpts: {
-                timeout: 15000, // Aumentado para dar más tiempo
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
+        guardarLogLocal(`   🔍 Extrayendo metadatos de: ${url}`);
+        
+        // Usar link-preview-js para obtener metadatos reales
+        const previewData = await getLinkPreview(url, {
+            timeout: 15000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             },
-            followRedirects: true
+            followRedirects: true,
+            // Para YouTube y otros sitios con video
+            resolveDNSHost: true
         });
+        
+        // Extraer la mejor imagen disponible
+        let thumbnailUrl = '';
+        if (previewData.images && previewData.images.length > 0) {
+            thumbnailUrl = previewData.images[0];
+        }
+        
+        // Construir el objeto que Baileys espera para linkPreview
+        const linkPreview = {
+            title: previewData.title || 'Sin título',
+            description: previewData.description || '',
+            canonicalUrl: url,
+            matchedText: url,
+            jpegThumbnail: thumbnailUrl ? await obtenerImagenComoBuffer(thumbnailUrl) : null
+        };
+        
+        guardarLogLocal(`   ✅ Metadatos extraídos: ${linkPreview.title}`);
+        if (thumbnailUrl) {
+            guardarLogLocal(`   🖼️ Imagen obtenida: ${thumbnailUrl.substring(0, 50)}...`);
+        }
+        
         return linkPreview;
+        
     } catch (error) {
-        guardarLogLocal(`   ⚠️ Error generando preview: ${error.message}`);
+        guardarLogLocal(`   ⚠️ Error extrayendo metadatos: ${error.message}`);
         return null;
     }
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO
+// FUNCIÓN AUXILIAR PARA OBTENER IMAGEN COMO BUFFER
+// ============================================
+async function obtenerImagenComoBuffer(url) {
+    try {
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'arraybuffer',
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        return Buffer.from(response.data);
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error descargando imagen: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW DE VERDAD)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -279,28 +325,32 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Mejorada expresión regular para capturar más tipos de URLs
-        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/|instagram\.com\/|tiktok\.com\/)[^\s]+/g) || [];
+        // Mejorada expresión regular para capturar URLs
+        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
         
+        // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
+        // Si hay URLs, intentar generar preview con metadatos reales
         if (urls.length > 0) {
-            guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
+            guardarLogLocal(`   🔗 Procesando URL: ${urls[0]}`);
             
-            const linkPreview = await generarLinkPreview(urls[0]);
+            // Generar preview con link-preview-js
+            const linkPreview = await generarLinkPreviewConMetadatos(urls[0]);
             
             if (linkPreview) {
                 opciones.linkPreview = linkPreview;
-                guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
-                guardarLogLocal(`   ⏱️  Esperando 1.5s para optimizar preview en Android...`);
-                await new Promise(resolve => setTimeout(resolve, 1500));
+                guardarLogLocal(`   ✅ Preview listo para enviar`);
+                
+                // Pequeño delay para asegurar procesamiento
+                await new Promise(resolve => setTimeout(resolve, 1000));
             } else {
-                opciones.linkPreview = {
-                    matchedText: urls[0]
-                };
+                // Fallback: enviar solo la URL
+                guardarLogLocal(`   ⚠️ Usando fallback (solo URL)`);
             }
         }
         
+        // Enviar mensaje
         await sock.sendMessage(id_grupo, opciones);
         
         return 'ENVIADO';
@@ -503,11 +553,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.3 (BROWSER INTELIGENTE)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 14.0 (LINK PREVIEWS REALES)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews optimizados (thumbnail 2400px, timeout 15s)');
+    console.log('🔗 Link Previews: EXTRACCIÓN REAL DE METADATOS');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
@@ -532,13 +582,11 @@ async function iniciarWhatsApp() {
         
         let browserConfig;
         if (!existeSesion) {
-            // Primera vez: Usar browser Ubuntu/Chrome que funciona con pairing code
             browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
             console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
         } else {
-            // Ya hay sesión: Cambiar a macOS para mejor compatibilidad con previews
             browserConfig = Browsers.macOS("Desktop");
-            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado para previews)');
+            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
         }
 
         const sock = makeWASocket({
@@ -668,7 +716,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: OPTIMIZADOS (2400px, 15s)\n` +
+                                      `🔗 Link Previews: EXTRACCIÓN REAL DE METADATOS\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
