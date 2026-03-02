@@ -1,11 +1,11 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 14.0 - Link Previews con metadatos reales (link-preview-js)
+// Versión: 14.1 - Título/descripción con Baileys, imagen con link-preview-js
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
-// - Link Previews con extracción real de metadatos usando link-preview-js
+// - Link Previews: título/descripción con Baileys, imagen con link-preview-js
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -16,7 +16,7 @@
 // - Logs solo locales
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -250,52 +250,6 @@ async function simularTyping(sock, id_destino, duracion) {
 }
 
 // ============================================
-// FUNCIÓN PARA GENERAR LINK PREVIEW CON LINK-PREVIEW-JS
-// ============================================
-async function generarLinkPreviewConMetadatos(url) {
-    try {
-        guardarLogLocal(`   🔍 Extrayendo metadatos de: ${url}`);
-        
-        // Usar link-preview-js para obtener metadatos reales
-        const previewData = await getLinkPreview(url, {
-            timeout: 15000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            },
-            followRedirects: true,
-            // Para YouTube y otros sitios con video
-            resolveDNSHost: true
-        });
-        
-        // Extraer la mejor imagen disponible
-        let thumbnailUrl = '';
-        if (previewData.images && previewData.images.length > 0) {
-            thumbnailUrl = previewData.images[0];
-        }
-        
-        // Construir el objeto que Baileys espera para linkPreview
-        const linkPreview = {
-            title: previewData.title || 'Sin título',
-            description: previewData.description || '',
-            canonicalUrl: url,
-            matchedText: url,
-            jpegThumbnail: thumbnailUrl ? await obtenerImagenComoBuffer(thumbnailUrl) : null
-        };
-        
-        guardarLogLocal(`   ✅ Metadatos extraídos: ${linkPreview.title}`);
-        if (thumbnailUrl) {
-            guardarLogLocal(`   🖼️ Imagen obtenida: ${thumbnailUrl.substring(0, 50)}...`);
-        }
-        
-        return linkPreview;
-        
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error extrayendo metadatos: ${error.message}`);
-        return null;
-    }
-}
-
-// ============================================
 // FUNCIÓN AUXILIAR PARA OBTENER IMAGEN COMO BUFFER
 // ============================================
 async function obtenerImagenComoBuffer(url) {
@@ -317,7 +271,40 @@ async function obtenerImagenComoBuffer(url) {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW DE VERDAD)
+// FUNCIÓN PARA OBTENER SOLO LA IMAGEN DEL PREVIEW
+// ============================================
+async function obtenerImagenPreview(url) {
+    try {
+        guardarLogLocal(`   🔍 Buscando imagen para: ${url}`);
+        
+        const previewData = await getLinkPreview(url, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            followRedirects: true
+        });
+        
+        if (previewData.images && previewData.images.length > 0) {
+            const imagenUrl = previewData.images[0];
+            guardarLogLocal(`   🖼️ Imagen encontrada: ${imagenUrl.substring(0, 50)}...`);
+            
+            // Descargar la imagen como buffer
+            const imagenBuffer = await obtenerImagenComoBuffer(imagenUrl);
+            return imagenBuffer;
+        }
+        
+        guardarLogLocal('   ⚠️ No se encontraron imágenes');
+        return null;
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error obteniendo imagen: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW COMPLETO)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -325,32 +312,53 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Mejorada expresión regular para capturar URLs
+        // Extraer URLs del mensaje
         const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
         
         // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
-        // Si hay URLs, intentar generar preview con metadatos reales
+        // Si hay URLs, generar link preview
         if (urls.length > 0) {
-            guardarLogLocal(`   🔗 Procesando URL: ${urls[0]}`);
+            guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
             
-            // Generar preview con link-preview-js
-            const linkPreview = await generarLinkPreviewConMetadatos(urls[0]);
+            // PASO 1: Usar getUrlInfo de Baileys para obtener título y descripción (esto YA funcionaba)
+            const linkPreview = await getUrlInfo(urls[0], {
+                thumbnailWidth: 2400,
+                fetchOpts: {
+                    timeout: 15000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                },
+                followRedirects: true
+            });
             
             if (linkPreview) {
-                opciones.linkPreview = linkPreview;
-                guardarLogLocal(`   ✅ Preview listo para enviar`);
+                // PASO 2: Obtener la imagen por separado usando link-preview-js
+                const imagenBuffer = await obtenerImagenPreview(urls[0]);
+                
+                // PASO 3: Construir el objeto final combinando ambos
+                opciones.linkPreview = {
+                    ...linkPreview,
+                    jpegThumbnail: imagenBuffer || linkPreview.jpegThumbnail
+                };
+                
+                guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
+                if (imagenBuffer) {
+                    guardarLogLocal(`   🖼️ Imagen añadida al preview`);
+                }
                 
                 // Pequeño delay para asegurar procesamiento
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 1500));
             } else {
-                // Fallback: enviar solo la URL
-                guardarLogLocal(`   ⚠️ Usando fallback (solo URL)`);
+                // Fallback
+                opciones.linkPreview = {
+                    matchedText: urls[0]
+                };
             }
         }
         
-        // Enviar mensaje
         await sock.sendMessage(id_grupo, opciones);
         
         return 'ENVIADO';
@@ -553,11 +561,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 14.0 (LINK PREVIEWS REALES)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 14.1 (PREVIEWS CON IMAGEN)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews: EXTRACCIÓN REAL DE METADATOS');
+    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con link-preview-js');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
@@ -716,7 +724,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: EXTRACCIÓN REAL DE METADATOS\n` +
+                                      `🔗 Link Previews: CON IMAGEN (link-preview-js)\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
