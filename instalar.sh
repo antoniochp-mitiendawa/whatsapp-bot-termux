@@ -43,7 +43,7 @@ npm install qrcode-terminal
 npm install node-cron
 npm install axios
 npm install pino
-npm install link-preview-js  # <-- NUEVA LÍNEA para que funcionen los previews
+npm install link-preview-js
 
 echo ""
 echo "===================================="
