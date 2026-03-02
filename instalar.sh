@@ -37,7 +37,7 @@ echo ""
 echo " PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
-npm install @whiskeysockets/baileys@6.5.0
+npm install @whiskeysockets/baileys
 npm install @hapi/boom
 npm install qrcode-terminal
 npm install node-cron
