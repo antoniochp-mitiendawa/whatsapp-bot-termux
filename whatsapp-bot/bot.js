@@ -1,12 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 13.2 - Browser optimizado para Link Previews en Android
+// Versión: 13.3 - Browser inteligente (Ubuntu para pairing, macOS para sesión)
 // Características:
 // - Conexión con código de emparejamiento
+// - Browser adaptativo: Ubuntu para primera vez, macOS para sesiones existentes
 // - Typing adaptativo (80% del delay)
 // - Link Previews con getUrlInfo() y delay post-procesamiento
 // - Alta calidad de previsualización
-// - Browser configurado como macOS/Desktop para mejor compatibilidad
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
 // - Delays aleatorios con formato "min-max" desde CONFIG
@@ -254,9 +254,9 @@ async function simularTyping(sock, id_destino, duracion) {
 async function generarLinkPreview(url) {
     try {
         const linkPreview = await getUrlInfo(url, {
-            thumbnailWidth: 1200,
+            thumbnailWidth: 2400, // Aumentado para mejor calidad
             fetchOpts: {
-                timeout: 8000,
+                timeout: 15000, // Aumentado para dar más tiempo
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
@@ -279,7 +279,8 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/)[^\s]+/g) || [];
+        // Mejorada expresión regular para capturar más tipos de URLs
+        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/|instagram\.com\/|tiktok\.com\/)[^\s]+/g) || [];
         
         const opciones = { text: mensaje };
         
@@ -384,7 +385,7 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN CORREGIDA PARA BAILEYS v6.7.19
+// FUNCIÓN PARA OBTENER GRUPOS DE WHATSAPP
 // ============================================
 async function obtenerGruposWhatsApp(sock) {
     try {
@@ -395,7 +396,7 @@ async function obtenerGruposWhatsApp(sock) {
             return [];
         }
         
-        guardarLogLocal('   Consultando grupos con API v6.7.19...');
+        guardarLogLocal('   Consultando grupos...');
         
         const gruposDict = await sock.groupFetchAllParticipatingGroups();
         
@@ -502,11 +503,12 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.2 (BROWSER OPTIMIZADO)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 13.3 (BROWSER INTELIGENTE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews optimizados con browser macOS/Desktop');
+    console.log('🔗 Link Previews optimizados (thumbnail 2400px, timeout 15s)');
+    console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
 
@@ -524,16 +526,27 @@ async function iniciarWhatsApp() {
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
         // ============================================
-        // CONFIGURACIÓN DEL SOCKET CON BROWSER OPTIMIZADO
+        // BROWSER INTELIGENTE: Detecta si ya hay sesión
         // ============================================
+        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
+        
+        let browserConfig;
+        if (!existeSesion) {
+            // Primera vez: Usar browser Ubuntu/Chrome que funciona con pairing code
+            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
+            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
+        } else {
+            // Ya hay sesión: Cambiar a macOS para mejor compatibilidad con previews
+            browserConfig = Browsers.macOS("Desktop");
+            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado para previews)');
+        }
+
         const sock = makeWASocket({
             version,
             auth: state,
             logger: logger,
             printQRInTerminal: false,
-            // Usar Browsers.macOS("Desktop") como recomienda la documentación oficial
-            // para emular escritorio y mejorar link previews en Android [citation:2]
-            browser: Browsers.macOS("Desktop"),
+            browser: browserConfig,
             syncFullHistory: false,
             markOnlineOnConnect: true,
             defaultQueryTimeoutMs: 60000,
@@ -655,7 +668,8 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: BROWSER OPTIMIZADO\n` +
+                                      `🔗 Link Previews: OPTIMIZADOS (2400px, 15s)\n` +
+                                      `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
