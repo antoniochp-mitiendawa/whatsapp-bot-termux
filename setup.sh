@@ -5,29 +5,53 @@ echo "CONFIGURANDO WHATSAPP BOT"
 echo "===================================="
 echo ""
 
-# Actualizar Termux
-echo "Paso 1: Actualizando Termux..."
-pkg update -y && pkg upgrade -y
+# PASO 1: Actualizar Termux
+echo " PASO 1: Actualizando Termux..."
+pkg update -y
+pkg upgrade -y
 
-# Instalar Node.js (necesario para el bot)
-echo "Paso 2: Instalando Node.js..."
-pkg install nodejs -y
-
-# Instalar git (para descargar cosas)
-echo "Paso 3: Instalando Git..."
+# PASO 2: Instalar Git (para descargar cosas)
+echo " PASO 2: Instalando Git..."
 pkg install git -y
 
-# Crear carpeta para el bot
-echo "Paso 4: Creando carpeta del bot..."
-mkdir whatsapp-bot
+# PASO 3: Instalar Node.js (necesario para el bot)
+echo " PASO 3: Instalando Node.js..."
+pkg install nodejs -y
+
+# PASO 4: Instalar yarn (opcional pero útil)
+echo " PASO 4: Instalando Yarn..."
+pkg install yarn -y
+
+# PASO 5: Crear carpeta para el bot
+echo " PASO 5: Creando carpeta del bot..."
+mkdir -p whatsapp-bot
+
+# PASO 6: Entrar a la carpeta
 cd whatsapp-bot
 
-# Inicializar proyecto Node.js
-echo "Paso 5: Preparando proyecto..."
+# PASO 7: Inicializar proyecto Node.js
+echo " PASO 6: Preparando proyecto..."
 npm init -y
 
+# PASO 8: Instalar Baileys (la librería de WhatsApp)
+echo " PASO 7: Instalando Baileys..."
+npm install @whiskeysockets/baileys
+
+# PASO 9: Instalar otras librerías útiles
+echo " PASO 8: Instalando librerías adicionales..."
+npm install qrcode-terminal
+npm install node-cron
+npm install axios
+
 echo ""
-echo "✅ Termux preparado"
+echo "===================================="
+echo "✅ CONFIGURACIÓN COMPLETA"
+echo "===================================="
 echo ""
-echo "Ahora ejecuta: npm install"
-echo "Y luego: npm install @whiskeysockets/baileys"
+echo "Todo está instalado correctamente."
+echo "El bot está en la carpeta: whatsapp-bot"
+echo ""
+echo "Para iniciar el bot escribe:"
+echo "cd whatsapp-bot"
+echo "node bot.js"
+echo ""
