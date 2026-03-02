@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 2.6 (con logs silenciados y pairing code)
+// Versión: 2.7 (con typing incluido)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
@@ -19,6 +19,7 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     tiempo_entre_mensajes: 5000,
+    tiempo_typing: 3000,
     carpeta_logs: './logs',
     numero_telefono: ''
 };
@@ -50,7 +51,7 @@ function leerURL() {
 }
 
 // ============================================
-// PEDIR NÚMERO DE TELÉFONO (SIN LOGS)
+// PEDIR NÚMERO DE TELÉFONO
 // ============================================
 function pedirNumeroSilencioso() {
     return new Promise((resolve) => {
@@ -102,13 +103,28 @@ function guardarLogLocal(texto) {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO
+// FUNCIÓN PARA SIMULAR QUE ESTÁ ESCRIBIENDO
+// ============================================
+async function simularTyping(sock, id_destino) {
+    try {
+        await sock.sendPresenceUpdate('composing', id_destino);
+        const tiempoTyping = Math.floor(Math.random() * 2000) + 2000;
+        await new Promise(resolve => setTimeout(resolve, tiempoTyping));
+        await sock.sendPresenceUpdate('paused', id_destino);
+        await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {}
+}
+
+// ============================================
+// ENVIAR MENSAJE A GRUPO (CON TYPING)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
         if (!id_grupo || !id_grupo.includes('@g.us')) {
             return 'ERROR: ID inválido';
         }
+        
+        await simularTyping(sock, id_grupo);
         await sock.sendMessage(id_grupo, { text: mensaje });
         return 'ENVIADO';
     } catch (error) {
@@ -171,9 +187,6 @@ async function iniciarWhatsApp() {
             shouldSyncHistoryMessage: () => false
         });
 
-        // ============================================
-        // CÓDIGO DE EMPAREJAMIENTO
-        // ============================================
         if (!sock.authState.creds.registered) {
             console.log('📱 PRIMERA CONFIGURACIÓN\n');
             const numero = await pedirNumeroSilencioso();
@@ -195,7 +208,6 @@ async function iniciarWhatsApp() {
             }, 2000);
         }
 
-        // Eventos de conexión
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
@@ -216,12 +228,12 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Programar verificaciones
         cron.schedule('0 * * * * *', async () => {
             await procesarMensajes(sock, url_sheets);
         });
 
-        console.log('⏰ Bot listo (verifica cada minuto)\n');
+        console.log('⏰ Bot listo (verifica cada minuto)');
+        console.log('✍️  Typing activado (simula escritura)\n');
 
     } catch (error) {
         guardarLogLocal(`ERROR: ${error.message}`);
@@ -229,11 +241,8 @@ async function iniciarWhatsApp() {
     }
 }
 
-// ============================================
-// INICIAR
-// ============================================
 console.log('====================================');
-console.log('🚀 SISTEMA DE MENSAJES');
+console.log('🚀 SISTEMA DE MENSAJES CON TYPING');
 console.log('====================================\n');
 
 iniciarWhatsApp().catch(error => {
