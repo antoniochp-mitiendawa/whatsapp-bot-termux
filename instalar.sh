@@ -42,6 +42,7 @@ npm install @hapi/boom
 npm install qrcode-terminal
 npm install node-cron
 npm install axios
+npm install pino
 
 echo ""
 echo "===================================="
@@ -63,6 +64,7 @@ if [ "$OPCION" == "1" ]; then
     echo "🚀 INICIANDO BOT..."
     echo "======================"
     echo ""
+    cd whatsapp-bot
     node bot.js
 else
     echo ""
