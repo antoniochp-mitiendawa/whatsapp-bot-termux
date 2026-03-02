@@ -10,4 +10,4 @@
 **Abre Termux y copia ESTE ÚNICO COMANDO:**
 
 ```bash
-pkg install wget -y && wget -O - https://raw.githubusercontent.com/TU-USUARIO/whatsapp-bot-termux/main/start.sh | bash
+pkg install wget -y && wget -O - https://raw.githubusercontent.com/antoniochp-mitiendawa/whatsapp-bot-termux/main/start.sh | bash
