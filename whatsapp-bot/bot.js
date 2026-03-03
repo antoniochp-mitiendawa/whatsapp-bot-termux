@@ -1,11 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 15.0 - Usando highQualityThumbnail nativo de Baileys
+// Versión: 16.0 - Con Data Store (PASO 1)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
-// - Link Previews: título/descripción con Baileys, imagen con highQualityThumbnail nativo
+// - Link Previews: título/descripción con Baileys, imagen con caché local
+// - Data Store integrado para almacenar información de grupos localmente
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -26,6 +27,10 @@ const readline = require('readline');
 const pino = require('pino');
 const { getLinkPreview } = require('link-preview-js');
 const crypto = require('crypto');
+// ============================================
+// NUEVA LIBRERÍA PARA DATA STORE
+// ============================================
+const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
 // ============================================
 // CONFIGURACIÓN
@@ -34,6 +39,10 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     archivo_agenda: './agenda.json',
+    // ============================================
+    // NUEVO: Archivo para el Data Store
+    // ============================================
+    archivo_store: './baileys_store.json',
     tiempo_entre_mensajes_min: 1,
     tiempo_entre_mensajes_max: 5,
     tiempo_typing: 3000,
@@ -53,6 +62,25 @@ if (!fs.existsSync(CONFIG.carpeta_sesion)) {
 if (!fs.existsSync(CONFIG.carpeta_cache)) {
     fs.mkdirSync(CONFIG.carpeta_cache);
 }
+
+// ============================================
+// NUEVO: INICIALIZAR DATA STORE
+// ============================================
+console.log('📚 Inicializando Data Store...');
+const store = makeInMemoryStore({
+    logger: pino({ level: 'silent' }).child({ stream: 'store' })
+});
+
+// Si ya existe un archivo del store, lo cargamos
+if (fs.existsSync(CONFIG.archivo_store)) {
+    store.readFromFile(CONFIG.archivo_store);
+    console.log('📚 Data Store cargado desde archivo.');
+}
+
+// Guardar el store cada 10 segundos
+setInterval(() => {
+    store.writeToFile(CONFIG.archivo_store);
+}, 10_000);
 
 // Cache simple para grupos (recomendado por documentación Baileys)
 const groupCache = new Map();
@@ -266,7 +294,6 @@ function generarHashURL(url) {
 
 // ============================================
 // FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
-// (MANTENIDA POR SI ACASO, PERO YA NO ES LA PRINCIPAL)
 // ============================================
 async function obtenerUrlImagenPreview(url) {
     try {
@@ -277,7 +304,7 @@ async function obtenerUrlImagenPreview(url) {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
-            followRedirects: 'follow' // CORREGIDO: ahora usa 'follow' en lugar de true
+            followRedirects: 'follow'
         });
         
         if (previewData.images && previewData.images.length > 0) {
@@ -297,7 +324,6 @@ async function obtenerUrlImagenPreview(url) {
 
 // ============================================
 // FUNCIÓN PARA OBTENER IMAGEN CON CACHÉ LOCAL
-// (MANTENIDA PARA COMPATIBILIDAD, PERO YA NO ES LA PRINCIPAL)
 // ============================================
 async function obtenerImagenConCache(url) {
     try {
@@ -361,7 +387,7 @@ function limpiarCacheImagenes() {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW USANDO HIGHQUALITYTHUMBNAIL)
+// ENVIAR MENSAJE A GRUPO
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -369,17 +395,13 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             return 'ERROR: ID inválido';
         }
         
-        // Extraer URLs del mensaje
         const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
         
-        // Configurar opciones de mensaje
         const opciones = { text: mensaje };
         
-        // Si hay URLs, generar link preview
         if (urls.length > 0) {
             guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
             
-            // PASO 1: Usar getUrlInfo de Baileys para obtener TODO (título, descripción Y highQualityThumbnail)
             const linkPreview = await getUrlInfo(urls[0], {
                 thumbnailWidth: 2400,
                 fetchOpts: {
@@ -392,23 +414,18 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             });
             
             if (linkPreview) {
-                // PASO 2: Usar el objeto COMPLETO que devuelve getUrlInfo
-                // Esto incluye highQualityThumbnail que es un ImageMessage nativo de WhatsApp
                 opciones.linkPreview = linkPreview;
                 
                 guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
                 
-                // Verificar si tiene highQualityThumbnail (imagen nativa)
                 if (linkPreview.highQualityThumbnail) {
                     guardarLogLocal(`   🖼️ Usando highQualityThumbnail nativo de Baileys`);
                 } else if (linkPreview.jpegThumbnail) {
                     guardarLogLocal(`   🖼️ Usando jpegThumbnail estándar`);
                 }
                 
-                // Pequeño delay para asegurar procesamiento
                 await new Promise(resolve => setTimeout(resolve, 1500));
             } else {
-                // Fallback
                 opciones.linkPreview = {
                     matchedText: urls[0]
                 };
@@ -466,7 +483,6 @@ async function verificarMensajesLocales(sock) {
             return;
         }
 
-        // Limpiar registro de imágenes del lote anterior
         imagenesUsadasEnLote.clear();
 
         for (const pestana of pestanasAHora) {
@@ -496,7 +512,6 @@ async function verificarMensajesLocales(sock) {
             guardarLogLocal(`✅ Pestaña "${pestana.nombre}" completada`);
         }
 
-        // Al terminar el lote, limpiar caché de imágenes
         limpiarCacheImagenes();
 
     } catch (error) {
@@ -506,7 +521,7 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER GRUPOS DE WHATSAPP
+// FUNCIÓN PARA OBTENER GRUPOS DE WHATSAPP (ACTUALMENTE CON ERROR)
 // ============================================
 async function obtenerGruposWhatsApp(sock) {
     try {
@@ -624,12 +639,13 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 15.0 (HIGHQUALITYTHUMBNAIL NATIVO)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 16.0 (CON DATA STORE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews: Usando highQualityThumbnail nativo de Baileys');
-    console.log('🗑️  Caché local mantenido por compatibilidad');
+    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
+    console.log('📚 Data Store activado (guardando información localmente)');
+    console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
@@ -674,6 +690,11 @@ async function iniciarWhatsApp() {
             generateHighQualityLinkPreview: true,
             cachedGroupMetadata: async (jid) => groupCache.get(jid)
         });
+
+        // ============================================
+        // NUEVO: VINCULAR EL DATA STORE AL SOCKET
+        // ============================================
+        store.bind(sock.ev);
 
         sock.ev.on('groups.update', async (updates) => {
             for (const update of updates) {
@@ -788,8 +809,9 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: HIGHQUALITYTHUMBNAIL NATIVO\n` +
-                                      `🗑️  Caché local: mantenido por compatibilidad\n` +
+                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                      `📚 Data Store: ACTIVADO\n` +
+                                      `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
@@ -840,6 +862,8 @@ process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
     limpiarCacheImagenes();
+    // Guardar store antes de salir
+    store.writeToFile(CONFIG.archivo_store);
     process.exit(0);
 });
 
