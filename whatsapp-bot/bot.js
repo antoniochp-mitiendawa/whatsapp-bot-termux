@@ -1,13 +1,13 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 25.0 - GRUPOS COMPLETOS (escucha de eventos)
+// Versión: 25.1 - GRUPOS COMPLETOS (sin eliminar funcionalidad existente)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
-// - NUEVO: Obtención COMPLETA de grupos (espera eventos 30 segundos)
+// - NUEVO: Obtención COMPLETA de grupos combinando store + eventos
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
 // - Consulta directa a WhatsApp si el nombre no se encuentra en el store
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
@@ -50,10 +50,10 @@ const CONFIG = {
     tiempo_typing: 3000,
     carpeta_logs: './logs',
     carpeta_cache: './cache',
-    carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
     numero_telefono: '',
     horarios_actualizacion: ['06:00', '18:00'],
     dias_retencion_store: 30,
+    carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
     // ============================================
     // NUEVA CONFIGURACIÓN: Tiempo de espera para grupos completos
     // ============================================
@@ -103,6 +103,113 @@ const groupCache = new Map();
 
 // Variable para llevar registro de imágenes usadas en el lote actual
 let imagenesUsadasEnLote = new Set();
+
+// ============================================
+// FUNCIÓN PARA BUSCAR ARCHIVO MULTIMEDIA
+// ============================================
+function buscarArchivoMultimedia(nombreArchivo) {
+    try {
+        if (!nombreArchivo || nombreArchivo.trim() === '') {
+            return null;
+        }
+
+        const nombreLimpio = nombreArchivo.trim();
+        guardarLogLocal(`   🔍 Buscando archivo: "${nombreLimpio}"`);
+
+        function buscarRecursivo(directorio) {
+            try {
+                const archivos = fs.readdirSync(directorio);
+                
+                for (const archivo of archivos) {
+                    const rutaCompleta = path.join(directorio, archivo);
+                    const estadistica = fs.statSync(rutaCompleta);
+                    
+                    if (estadistica.isDirectory()) {
+                        const encontrado = buscarRecursivo(rutaCompleta);
+                        if (encontrado) return encontrado;
+                    } else {
+                        const nombreSinExtension = path.parse(archivo).name;
+                        if (nombreSinExtension.toLowerCase() === nombreLimpio.toLowerCase()) {
+                            guardarLogLocal(`   ✅ Archivo encontrado: ${rutaCompleta}`);
+                            return {
+                                ruta: rutaCompleta,
+                                nombre: archivo,
+                                extension: path.extname(archivo).toLowerCase()
+                            };
+                        }
+                    }
+                }
+            } catch (error) {}
+            return null;
+        }
+
+        return buscarRecursivo(CONFIG.carpeta_multimedia);
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error buscando archivo: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// FUNCIÓN PARA ENVIAR ARCHIVO MULTIMEDIA
+// ============================================
+async function enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio) {
+    try {
+        const extension = archivoInfo.extension;
+        const buffer = fs.readFileSync(archivoInfo.ruta);
+        
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
+            guardarLogLocal(`   🖼️ Enviando imagen: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                image: buffer,
+                caption: textoLimpio || ''
+            });
+            return 'IMAGEN ENVIADA';
+        }
+        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(extension)) {
+            guardarLogLocal(`   🎬 Enviando video: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                video: buffer,
+                caption: textoLimpio || ''
+            });
+            return 'VIDEO ENVIADO';
+        }
+        else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac'].includes(extension)) {
+            guardarLogLocal(`   🎵 Enviando audio: ${archivoInfo.nombre}`);
+            let mimetype = 'audio/mpeg';
+            if (extension === '.ogg') mimetype = 'audio/ogg';
+            if (extension === '.m4a') mimetype = 'audio/mp4';
+            if (extension === '.wav') mimetype = 'audio/wav';
+            
+            await sock.sendMessage(id_grupo, {
+                audio: buffer,
+                mimetype: mimetype
+            });
+            
+            if (textoLimpio && textoLimpio.trim() !== '') {
+                guardarLogLocal(`   📝 Enviando texto aparte para el audio`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                await sock.sendMessage(id_grupo, { text: textoLimpio });
+            }
+            return 'AUDIO ENVIADO' + (textoLimpio ? ' + TEXTO' : '');
+        }
+        else {
+            guardarLogLocal(`   📄 Enviando documento: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                document: buffer,
+                fileName: archivoInfo.nombre,
+                mimetype: 'application/octet-stream',
+                caption: textoLimpio || ''
+            });
+            return 'DOCUMENTO ENVIADO';
+        }
+        
+    } catch (error) {
+        guardarLogLocal(`   ❌ Error enviando archivo: ${error.message}`);
+        return 'ERROR: ' + error.message.substring(0, 50);
+    }
+}
 
 // ============================================
 // FUNCIÓN PARA LIMPIAR STORE ANTIGUO
@@ -458,252 +565,6 @@ function limpiarCacheImagenes() {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Buscar archivo multimedia
-// ============================================
-function buscarArchivoMultimedia(nombreArchivo) {
-    try {
-        if (!nombreArchivo || nombreArchivo.trim() === '') {
-            return null;
-        }
-
-        const nombreLimpio = nombreArchivo.trim();
-        guardarLogLocal(`   🔍 Buscando archivo: "${nombreLimpio}"`);
-
-        function buscarRecursivo(directorio) {
-            try {
-                const archivos = fs.readdirSync(directorio);
-                
-                for (const archivo of archivos) {
-                    const rutaCompleta = path.join(directorio, archivo);
-                    const estadistica = fs.statSync(rutaCompleta);
-                    
-                    if (estadistica.isDirectory()) {
-                        const encontrado = buscarRecursivo(rutaCompleta);
-                        if (encontrado) return encontrado;
-                    } else {
-                        const nombreSinExtension = path.parse(archivo).name;
-                        if (nombreSinExtension.toLowerCase() === nombreLimpio.toLowerCase()) {
-                            guardarLogLocal(`   ✅ Archivo encontrado: ${rutaCompleta}`);
-                            return {
-                                ruta: rutaCompleta,
-                                nombre: archivo,
-                                extension: path.extname(archivo).toLowerCase()
-                            };
-                        }
-                    }
-                }
-            } catch (error) {}
-            return null;
-        }
-
-        return buscarRecursivo(CONFIG.carpeta_multimedia);
-        
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error buscando archivo: ${error.message}`);
-        return null;
-    }
-}
-
-// ============================================
-// NUEVA FUNCIÓN: Determinar tipo de archivo y enviar
-// ============================================
-async function enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio) {
-    try {
-        const extension = archivoInfo.extension;
-        const buffer = fs.readFileSync(archivoInfo.ruta);
-        
-        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
-            guardarLogLocal(`   🖼️ Enviando imagen: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                image: buffer,
-                caption: textoLimpio || ''
-            });
-            return 'IMAGEN ENVIADA';
-        }
-        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(extension)) {
-            guardarLogLocal(`   🎬 Enviando video: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                video: buffer,
-                caption: textoLimpio || ''
-            });
-            return 'VIDEO ENVIADO';
-        }
-        else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac'].includes(extension)) {
-            guardarLogLocal(`   🎵 Enviando audio: ${archivoInfo.nombre}`);
-            let mimetype = 'audio/mpeg';
-            if (extension === '.ogg') mimetype = 'audio/ogg';
-            if (extension === '.m4a') mimetype = 'audio/mp4';
-            if (extension === '.wav') mimetype = 'audio/wav';
-            
-            await sock.sendMessage(id_grupo, {
-                audio: buffer,
-                mimetype: mimetype
-            });
-            
-            if (textoLimpio && textoLimpio.trim() !== '') {
-                guardarLogLocal(`   📝 Enviando texto aparte para el audio`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                await sock.sendMessage(id_grupo, { text: textoLimpio });
-            }
-            return 'AUDIO ENVIADO' + (textoLimpio ? ' + TEXTO' : '');
-        }
-        else {
-            guardarLogLocal(`   📄 Enviando documento: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                document: buffer,
-                fileName: archivoInfo.nombre,
-                mimetype: 'application/octet-stream',
-                caption: textoLimpio || ''
-            });
-            return 'DOCUMENTO ENVIADO';
-        }
-        
-    } catch (error) {
-        guardarLogLocal(`   ❌ Error enviando archivo: ${error.message}`);
-        return 'ERROR: ' + error.message.substring(0, 50);
-    }
-}
-
-// ============================================
-// NUEVA FUNCIÓN: Obtener TODOS los grupos (esperando eventos)
-// ============================================
-async function obtenerTodosLosGruposCompletos(sock) {
-    return new Promise(async (resolve) => {
-        try {
-            guardarLogLocal('🔍 Iniciando obtención COMPLETA de grupos (esperando eventos)...');
-            
-            const gruposMap = new Map(); // Para almacenar grupos únicos por ID
-            let timeoutCompletado = false;
-            
-            // Escuchar eventos de actualización de grupos
-            const manejarGroupsUpdate = (updates) => {
-                if (timeoutCompletado) return;
-                
-                updates.forEach(update => {
-                    if (update.id && update.id.endsWith('@g.us')) {
-                        if (!gruposMap.has(update.id)) {
-                            gruposMap.set(update.id, update);
-                            guardarLogLocal(`   ➕ Grupo añadido por evento: ${update.id}`);
-                        }
-                    }
-                });
-            };
-            
-            // Registrar el listener
-            sock.ev.on('groups.update', manejarGroupsUpdate);
-            
-            // Hacer la consulta inicial
-            guardarLogLocal('   Consultando grupos con groupFetchAllParticipatingGroups()...');
-            const gruposIniciales = await sock.groupFetchAllParticipatingGroups();
-            
-            if (gruposIniciales && typeof gruposIniciales === 'object') {
-                Object.entries(gruposIniciales).forEach(([id, info]) => {
-                    if (id.endsWith('@g.us')) {
-                        gruposMap.set(id, info);
-                    }
-                });
-                guardarLogLocal(`   ✅ Grupos iniciales: ${gruposMap.size}`);
-            }
-            
-            // Esperar el tiempo configurado para que lleguen más eventos
-            guardarLogLocal(`   ⏳ Esperando ${CONFIG.tiempo_espera_grupos/1000} segundos para más grupos...`);
-            
-            await new Promise(resolveTimeout => {
-                setTimeout(() => {
-                    timeoutCompletado = true;
-                    resolveTimeout();
-                }, CONFIG.tiempo_espera_grupos);
-            });
-            
-            // Remover el listener
-            sock.ev.off('groups.update', manejarGroupsUpdate);
-            
-            // Convertir el Map a array de grupos
-            const gruposArray = Array.from(gruposMap.entries()).map(([id, info]) => ({
-                id: id,
-                info: info
-            }));
-            
-            guardarLogLocal(`✅ Total de grupos después de espera: ${gruposArray.length}`);
-            resolve(gruposArray);
-            
-        } catch (error) {
-            guardarLogLocal(`❌ Error en obtención de grupos: ${error.message}`);
-            resolve([]);
-        }
-    });
-}
-
-// ============================================
-// FUNCIÓN MODIFICADA: Obtener grupos desde Data Store (usando la nueva función)
-// ============================================
-async function obtenerGruposDesdeStore(sock) {
-    try {
-        guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
-        
-        // Primero obtener todos los grupos completos
-        const gruposCompletos = await obtenerTodosLosGruposCompletos(sock);
-        
-        if (gruposCompletos.length === 0) {
-            guardarLogLocal('⚠️ No se obtuvieron grupos');
-            return [];
-        }
-        
-        guardarLogLocal(`   Procesando ${gruposCompletos.length} grupos...`);
-        
-        const listaGrupos = [];
-        
-        for (const grupo of gruposCompletos) {
-            let nombreGrupo = 'Sin nombre';
-            const chat = grupo.info;
-            
-            // Buscar en el store (lo que ya funcionaba)
-            if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
-                nombreGrupo = chat.name;
-            }
-            else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
-                nombreGrupo = chat.subject;
-            }
-            else if (chat.metadata && chat.metadata.subject) {
-                nombreGrupo = chat.metadata.subject;
-            }
-            else if (chat.metadata && chat.metadata.name) {
-                nombreGrupo = chat.metadata.name;
-            }
-            else if (chat.title) {
-                nombreGrupo = chat.title;
-            }
-            
-            // Si sigue siendo "Sin nombre", preguntar directamente a WhatsApp
-            if (nombreGrupo === 'Sin nombre' && sock) {
-                guardarLogLocal(`   ⚠️ Grupo sin nombre, consultando a WhatsApp: ${grupo.id}`);
-                try {
-                    const metadata = await sock.groupMetadata(grupo.id);
-                    if (metadata && metadata.subject) {
-                        nombreGrupo = metadata.subject;
-                        guardarLogLocal(`   ✅ Nombre obtenido de WhatsApp: ${nombreGrupo}`);
-                    }
-                } catch (error) {
-                    guardarLogLocal(`   ❌ Error consultando grupo: ${error.message}`);
-                }
-            }
-            
-            listaGrupos.push({
-                id: grupo.id,
-                nombre: nombreGrupo
-            });
-        }
-        
-        guardarLogLocal(`✅ ${listaGrupos.length} grupos procesados correctamente`);
-        return listaGrupos;
-        
-    } catch (error) {
-        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
-        return [];
-    }
-}
-
-// ============================================
 // FUNCIÓN PARA ENVIAR MENSAJE A GRUPO (con soporte multimedia)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
@@ -844,13 +705,158 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
+// NUEVA FUNCIÓN: Obtener TODOS los grupos esperando eventos
+// ============================================
+async function obtenerGruposConEspera(sock) {
+    return new Promise((resolve) => {
+        try {
+            guardarLogLocal('⏳ Iniciando espera de 30 segundos para capturar TODOS los grupos...');
+            
+            const gruposIds = new Set();
+            let timeoutCompletado = false;
+            
+            // Función para manejar eventos de grupos
+            const manejarGroupsUpdate = (updates) => {
+                if (timeoutCompletado) return;
+                
+                updates.forEach(update => {
+                    if (update.id && update.id.endsWith('@g.us')) {
+                        if (!gruposIds.has(update.id)) {
+                            gruposIds.add(update.id);
+                            guardarLogLocal(`   ➕ Grupo detectado por evento: ${update.id}`);
+                        }
+                    }
+                });
+            };
+            
+            // Registrar el listener
+            sock.ev.on('groups.update', manejarGroupsUpdate);
+            
+            // Esperar el tiempo configurado
+            setTimeout(() => {
+                timeoutCompletado = true;
+                sock.ev.off('groups.update', manejarGroupsUpdate);
+                
+                guardarLogLocal(`✅ Espera completada. Se detectaron ${gruposIds.size} grupos por eventos.`);
+                resolve(Array.from(gruposIds));
+            }, CONFIG.tiempo_espera_grupos);
+            
+        } catch (error) {
+            guardarLogLocal(`❌ Error en espera de grupos: ${error.message}`);
+            resolve([]);
+        }
+    });
+}
+
+// ============================================
+// FUNCIÓN MODIFICADA: Obtener grupos desde Data Store (con espera opcional)
+// ============================================
+async function obtenerGruposDesdeStore(sock, usarEspera = false) {
+    try {
+        guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
+        
+        // Si se solicita, esperar eventos primero
+        let gruposIdsAdicionales = [];
+        if (usarEspera) {
+            gruposIdsAdicionales = await obtenerGruposConEspera(sock);
+        }
+        
+        if (!store || !store.chats) {
+            guardarLogLocal('❌ Data Store no disponible');
+            return [];
+        }
+        
+        const todosLosChats = store.chats.all() || [];
+        guardarLogLocal(`   Total de chats en store: ${todosLosChats.length}`);
+        
+        const grupos = todosLosChats.filter(chat => chat.id && chat.id.endsWith('@g.us'));
+        
+        guardarLogLocal(`   Chats del store filtrados como grupos: ${grupos.length}`);
+        
+        if (gruposIdsAdicionales.length > 0) {
+            guardarLogLocal(`   Grupos adicionales por eventos: ${gruposIdsAdicionales.length}`);
+        }
+        
+        const listaGrupos = [];
+        const gruposProcesados = new Set();
+        
+        // Primero procesar los grupos del store
+        for (const chat of grupos) {
+            let nombreGrupo = 'Sin nombre';
+            
+            if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
+                nombreGrupo = chat.name;
+            }
+            else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
+                nombreGrupo = chat.subject;
+            }
+            else if (chat.metadata && chat.metadata.subject) {
+                nombreGrupo = chat.metadata.subject;
+            }
+            else if (chat.metadata && chat.metadata.name) {
+                nombreGrupo = chat.metadata.name;
+            }
+            else if (chat.title) {
+                nombreGrupo = chat.title;
+            }
+            
+            if (nombreGrupo === 'Sin nombre' && sock) {
+                guardarLogLocal(`   ⚠️ Grupo sin nombre en store, consultando a WhatsApp: ${chat.id}`);
+                try {
+                    const metadata = await sock.groupMetadata(chat.id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                        guardarLogLocal(`   ✅ Nombre obtenido de WhatsApp: ${nombreGrupo}`);
+                    }
+                } catch (error) {
+                    guardarLogLocal(`   ❌ Error consultando grupo a WhatsApp: ${error.message}`);
+                }
+            }
+            
+            listaGrupos.push({
+                id: chat.id,
+                nombre: nombreGrupo
+            });
+            gruposProcesados.add(chat.id);
+        }
+        
+        // Luego procesar los grupos adicionales de eventos que no estén en el store
+        for (const id of gruposIdsAdicionales) {
+            if (!gruposProcesados.has(id) && sock) {
+                guardarLogLocal(`   🔄 Procesando grupo adicional de evento: ${id}`);
+                try {
+                    const metadata = await sock.groupMetadata(id);
+                    if (metadata && metadata.subject) {
+                        listaGrupos.push({
+                            id: id,
+                            nombre: metadata.subject
+                        });
+                        guardarLogLocal(`   ✅ Nombre obtenido para grupo adicional: ${metadata.subject}`);
+                    }
+                } catch (error) {
+                    guardarLogLocal(`   ❌ Error consultando grupo adicional: ${error.message}`);
+                }
+            }
+        }
+        
+        guardarLogLocal(`✅ Total de grupos procesados: ${listaGrupos.length}`);
+        return listaGrupos;
+        
+    } catch (error) {
+        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================
 // FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
 // ============================================
 async function sincronizarGruposConSheets(sock, url_sheets) {
     try {
         guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
         
-        const grupos = await obtenerGruposDesdeStore(sock);
+        // En sincronización automática, NO usamos espera de 30 segundos
+        const grupos = await obtenerGruposDesdeStore(sock, false);
         
         if (grupos.length === 0) {
             guardarLogLocal('⚠️ No hay grupos para sincronizar');
@@ -933,7 +939,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 25.0 (GRUPOS COMPLETOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 25.1 (GRUPOS COMPLETOS CON ESPERA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -944,11 +950,11 @@ async function iniciarWhatsApp() {
     console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
     console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
-    console.log('👥 GRUPOS COMPLETOS: esperando 30 segundos para obtener TODOS los grupos');
+    console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Comando: "listagrupos" - Exporta grupos desde Data Store a CSV + Sheets\n');
+    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con espera) a CSV + Sheets\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1129,10 +1135,10 @@ async function iniciarWhatsApp() {
                                       `🏷️  Nombres de grupos: búsqueda múltiple + consulta directa\n` +
                                       `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
                                       `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
-                                      `👥  Grupos completos: espera 30 segundos para lista TOTAL\n` +
+                                      `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                      `📤 Comando listagrupos: disponible (desde store)\n` +
+                                      `📤 Comando listagrupos: disponible (con espera)\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
@@ -1141,12 +1147,13 @@ async function iniciarWhatsApp() {
                     if (cmd === 'listagrupos' || cmd === 'grupos') {
                         guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: listagrupos`);
                         
-                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos)...' });
+                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
                         
-                        const grupos = await obtenerGruposDesdeStore(sock);
+                        // Usar espera de 30 segundos SOLO para el comando listagrupos
+                        const grupos = await obtenerGruposDesdeStore(sock, true);
                         
                         if (grupos.length === 0) {
-                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos en el Data Store. Asegúrate de que el bot esté en al menos un grupo.' });
+                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
                             return;
                         }
                         
@@ -1158,7 +1165,7 @@ async function iniciarWhatsApp() {
                         confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
                         confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                         confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                        confirmacion += `📚 Fuente: Consulta completa con espera de 30 segundos`;
+                        confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
                         
                         await sock.sendMessage(remitente, { text: confirmacion });
                     }
@@ -1169,7 +1176,7 @@ async function iniciarWhatsApp() {
         console.log('\n📝 Comandos disponibles en WhatsApp:');
         console.log('   - "actualizar" - Forzar descarga de agenda');
         console.log('   - "status" - Ver estado del bot');
-        console.log('   - "listagrupos" - Exporta grupos COMPLETOS a CSV + Sheets');
+        console.log('   - "listagrupos" - Exporta TODOS los grupos (con 30s de espera) a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
