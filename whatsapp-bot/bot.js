@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 21.0 - Limpieza automática del Data Store (30 días)
+// Versión: 24.0 - SOPORTE MULTIMEDIA (imágenes, audios, videos, documentos)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -10,7 +10,9 @@
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
 // - Consulta directa a WhatsApp si el nombre no se encuentra en el store
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
-// - NUEVO: Limpieza automática del Data Store (mensajes > 30 días)
+// - Limpieza automática del Data Store (mensajes > 30 días)
+// - NUEVO: Envío de archivos multimedia (imágenes, audios, videos, documentos)
+// - Los archivos se buscan en /storage/emulated/0/WhatsAppBot/
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -51,10 +53,11 @@ const CONFIG = {
     carpeta_cache: './cache',
     numero_telefono: '',
     horarios_actualizacion: ['06:00', '18:00'],
+    dias_retencion_store: 30,
     // ============================================
-    // NUEVA CONFIGURACIÓN: Días de retención del store
+    // NUEVO: Carpeta para archivos multimedia del usuario
     // ============================================
-    dias_retencion_store: 30
+    carpeta_multimedia: '/storage/emulated/0/WhatsAppBot'
 };
 
 // Crear carpetas necesarias
@@ -66,6 +69,17 @@ if (!fs.existsSync(CONFIG.carpeta_sesion)) {
 }
 if (!fs.existsSync(CONFIG.carpeta_cache)) {
     fs.mkdirSync(CONFIG.carpeta_cache);
+}
+// ============================================
+// NUEVO: Crear carpeta multimedia si no existe
+// ============================================
+if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
+    try {
+        fs.mkdirSync(CONFIG.carpeta_multimedia, { recursive: true });
+        console.log('📁 Carpeta multimedia creada:', CONFIG.carpeta_multimedia);
+    } catch (error) {
+        console.error('❌ Error creando carpeta multimedia:', error.message);
+    }
 }
 
 // ============================================
@@ -94,7 +108,130 @@ const groupCache = new Map();
 let imagenesUsadasEnLote = new Set();
 
 // ============================================
-// NUEVA FUNCIÓN: Limpiar mensajes antiguos del Data Store
+// NUEVA FUNCIÓN: Buscar archivo multimedia
+// ============================================
+function buscarArchivoMultimedia(nombreArchivo) {
+    try {
+        if (!nombreArchivo || nombreArchivo.trim() === '') {
+            return null;
+        }
+
+        const nombreLimpio = nombreArchivo.trim();
+        guardarLogLocal(`   🔍 Buscando archivo: "${nombreLimpio}"`);
+
+        // Función para buscar recursivamente
+        function buscarRecursivo(directorio) {
+            try {
+                const archivos = fs.readdirSync(directorio);
+                
+                for (const archivo of archivos) {
+                    const rutaCompleta = path.join(directorio, archivo);
+                    const estadistica = fs.statSync(rutaCompleta);
+                    
+                    if (estadistica.isDirectory()) {
+                        // Buscar en subcarpetas
+                        const encontrado = buscarRecursivo(rutaCompleta);
+                        if (encontrado) return encontrado;
+                    } else {
+                        // Comparar nombres (sin extensión)
+                        const nombreSinExtension = path.parse(archivo).name;
+                        if (nombreSinExtension.toLowerCase() === nombreLimpio.toLowerCase()) {
+                            guardarLogLocal(`   ✅ Archivo encontrado: ${rutaCompleta}`);
+                            return {
+                                ruta: rutaCompleta,
+                                nombre: archivo,
+                                extension: path.extname(archivo).toLowerCase()
+                            };
+                        }
+                    }
+                }
+            } catch (error) {
+                // Ignorar errores de carpetas sin permisos
+            }
+            return null;
+        }
+
+        return buscarRecursivo(CONFIG.carpeta_multimedia);
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error buscando archivo: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Determinar tipo de archivo y enviar
+// ============================================
+async function enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio) {
+    try {
+        const extension = archivoInfo.extension;
+        const buffer = fs.readFileSync(archivoInfo.ruta);
+        
+        // Imágenes
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
+            guardarLogLocal(`   🖼️ Enviando imagen: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                image: buffer,
+                caption: textoLimpio || ''
+            });
+            return 'IMAGEN ENVIADA';
+        }
+        
+        // Videos
+        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(extension)) {
+            guardarLogLocal(`   🎬 Enviando video: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                video: buffer,
+                caption: textoLimpio || ''
+            });
+            return 'VIDEO ENVIADO';
+        }
+        
+        // Audios
+        else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac'].includes(extension)) {
+            guardarLogLocal(`   🎵 Enviando audio: ${archivoInfo.nombre}`);
+            
+            // Determinar mimetype
+            let mimetype = 'audio/mpeg';
+            if (extension === '.ogg') mimetype = 'audio/ogg';
+            if (extension === '.m4a') mimetype = 'audio/mp4';
+            if (extension === '.wav') mimetype = 'audio/wav';
+            
+            await sock.sendMessage(id_grupo, {
+                audio: buffer,
+                mimetype: mimetype
+            });
+            
+            // Si hay texto, enviarlo como mensaje aparte
+            if (textoLimpio && textoLimpio.trim() !== '') {
+                guardarLogLocal(`   📝 Enviando texto aparte para el audio`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                await sock.sendMessage(id_grupo, { text: textoLimpio });
+            }
+            
+            return 'AUDIO ENVIADO' + (textoLimpio ? ' + TEXTO' : '');
+        }
+        
+        // Documentos
+        else {
+            guardarLogLocal(`   📄 Enviando documento: ${archivoInfo.nombre}`);
+            await sock.sendMessage(id_grupo, {
+                document: buffer,
+                fileName: archivoInfo.nombre,
+                mimetype: 'application/octet-stream',
+                caption: textoLimpio || ''
+            });
+            return 'DOCUMENTO ENVIADO';
+        }
+        
+    } catch (error) {
+        guardarLogLocal(`   ❌ Error enviando archivo: ${error.message}`);
+        return 'ERROR: ' + error.message.substring(0, 50);
+    }
+}
+
+// ============================================
+// FUNCIÓN PARA LIMPIAR STORE ANTIGUO
 // ============================================
 function limpiarStoreAntiguo() {
     try {
@@ -105,30 +242,26 @@ function limpiarStoreAntiguo() {
             return false;
         }
         
-        // Calcular fecha límite (hoy - días_retencion_store)
         const fechaLimite = new Date();
         fechaLimite.setDate(fechaLimite.getDate() - CONFIG.dias_retencion_store);
         const timestampLimite = fechaLimite.getTime();
         
         guardarLogLocal(`   Conservando mensajes posteriores a: ${fechaLimite.toLocaleDateString()}`);
         
-        // Obtener todos los chats
         const chats = store.chats.all() || [];
         let mensajesEliminados = 0;
         
         chats.forEach(chat => {
             if (!chat.messages) return;
             
-            // Filtrar mensajes: conservar solo los más recientes que la fecha límite
             const mensajesOriginales = Array.from(chat.messages.values());
             const mensajesConservar = mensajesOriginales.filter(msg => {
-                const msgTimestamp = msg.messageTimestamp * 1000; // Convertir a milisegundos
+                const msgTimestamp = msg.messageTimestamp * 1000;
                 return msgTimestamp >= timestampLimite;
             });
             
             mensajesEliminados += mensajesOriginales.length - mensajesConservar.length;
             
-            // Reconstruir el mapa de mensajes
             if (mensajesConservar.length > 0) {
                 const nuevoMapa = new Map();
                 mensajesConservar.forEach(msg => {
@@ -142,9 +275,7 @@ function limpiarStoreAntiguo() {
             }
         });
         
-        // Guardar los cambios en el archivo
         store.writeToFile(CONFIG.archivo_store);
-        
         guardarLogLocal(`✅ Limpieza completada: ${mensajesEliminados} mensajes antiguos eliminados`);
         return true;
         
@@ -453,17 +584,40 @@ function limpiarCacheImagenes() {
 }
 
 // ============================================
-// ENVIAR MENSAJE A GRUPO
+// NUEVA FUNCIÓN: ENVIAR MENSAJE A GRUPO (con soporte multimedia)
 // ============================================
-async function enviarMensaje(sock, id_grupo, mensaje) {
+async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
         if (!id_grupo || !id_grupo.includes('@g.us')) {
             return 'ERROR: ID inválido';
         }
         
-        const urls = mensaje.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
+        // Detectar si hay un archivo multimedia entre paréntesis
+        const regexArchivo = /\(([^)]+)\)/;
+        const match = mensajeOriginal.match(regexArchivo);
         
-        const opciones = { text: mensaje };
+        if (match) {
+            const nombreArchivo = match[1]; // Lo que está dentro del paréntesis
+            const textoLimpio = mensajeOriginal.replace(regexArchivo, '').trim(); // Texto sin el paréntesis
+            
+            // Buscar el archivo
+            const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
+            
+            if (archivoInfo) {
+                // Enviar archivo multimedia
+                const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio);
+                return resultado;
+            } else {
+                guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}"`);
+                // Si no se encuentra el archivo, enviar el mensaje original como texto
+                await sock.sendMessage(id_grupo, { text: mensajeOriginal });
+                return 'TEXTO ENVIADO (archivo no encontrado)';
+            }
+        }
+        
+        // Si no hay paréntesis, enviar como texto normal
+        const urls = mensajeOriginal.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
+        const opciones = { text: mensajeOriginal };
         
         if (urls.length > 0) {
             guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
@@ -481,26 +635,14 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             
             if (linkPreview) {
                 opciones.linkPreview = linkPreview;
-                
                 guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
-                
-                if (linkPreview.highQualityThumbnail) {
-                    guardarLogLocal(`   🖼️ Usando highQualityThumbnail nativo de Baileys`);
-                } else if (linkPreview.jpegThumbnail) {
-                    guardarLogLocal(`   🖼️ Usando jpegThumbnail estándar`);
-                }
-                
                 await new Promise(resolve => setTimeout(resolve, 1500));
-            } else {
-                opciones.linkPreview = {
-                    matchedText: urls[0]
-                };
             }
         }
         
         await sock.sendMessage(id_grupo, opciones);
+        return 'TEXTO ENVIADO';
         
-        return 'ENVIADO';
     } catch (error) {
         return 'ERROR: ' + error.message.substring(0, 50);
     }
@@ -610,7 +752,6 @@ async function obtenerGruposDesdeStore(sock) {
         for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
             
-            // Buscar en el store (lo que ya funcionaba)
             if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
                 nombreGrupo = chat.name;
             }
@@ -627,7 +768,6 @@ async function obtenerGruposDesdeStore(sock) {
                 nombreGrupo = chat.title;
             }
             
-            // Si sigue siendo "Sin nombre", preguntar directamente a WhatsApp
             if (nombreGrupo === 'Sin nombre' && sock) {
                 guardarLogLocal(`   ⚠️ Grupo sin nombre en store, consultando a WhatsApp: ${chat.id}`);
                 try {
@@ -746,7 +886,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 21.0 (LIMPIEZA AUTOMÁTICA STORE)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 24.0 (SOPORTE MULTIMEDIA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -755,6 +895,8 @@ async function iniciarWhatsApp() {
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
     console.log('🏷️  Nombres de grupos: búsqueda en store + consulta directa');
     console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
+    console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
+    console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -773,9 +915,6 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
-        // ============================================
-        // BROWSER INTELIGENTE: Detecta si ya hay sesión
-        // ============================================
         const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
         
         let browserConfig;
@@ -801,9 +940,6 @@ async function iniciarWhatsApp() {
             cachedGroupMetadata: async (jid) => groupCache.get(jid)
         });
 
-        // ============================================
-        // VINCULAR EL DATA STORE AL SOCKET
-        // ============================================
         store.bind(sock.ev);
 
         sock.ev.on('groups.update', async (updates) => {
@@ -850,9 +986,6 @@ async function iniciarWhatsApp() {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
                 guardarLogLocal('CONEXIÓN EXITOSA');
                 
-                // ============================================
-                // NUEVO: Ejecutar limpieza del store al conectar
-                // ============================================
                 limpiarStoreAntiguo();
                 
                 const agenda = cargarAgendaLocal();
@@ -880,13 +1013,11 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Programar limpieza del store CADA DÍA a las 3:00 AM
         cron.schedule('0 3 * * *', async () => {
             guardarLogLocal('⏰ Ejecutando limpieza programada del Data Store (3 AM)');
             limpiarStoreAntiguo();
         });
 
-        // Programar sincronización cada 12 horas
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
             const expresionCron = `${minutos} ${horas} * * *`;
@@ -949,6 +1080,7 @@ async function iniciarWhatsApp() {
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                       `🏷️  Nombres de grupos: búsqueda múltiple + consulta directa\n` +
                                       `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                      `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (desde store)\n` +
