@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.2 - LECTURA DE PARÁMETROS PARA HISTORIAS
+// Versión: 28.1 - NÚMERO ADMINISTRADOR Y COMANDO HISTORIAS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -18,7 +18,10 @@
 // - Comandos "actualizar", "status" y "listagrupos" desde WhatsApp
 // - Cache de grupos para mejor rendimiento
 // - Logs solo locales
-// - NUEVO: Lectura de parámetros para Historias (HORARIO_HISTORIAS, DIAS_HISTORIAS, INTERVALO_HISTORIAS)
+// - Lectura de parámetros para Historias (HORARIO_HISTORIAS, DIAS_HISTORIAS, INTERVALO_HISTORIAS)
+// - NUEVO: Número de Administrador desde CONFIG (NUMERO_ADMIN)
+// - NUEVO: Validación de comandos solo para admin
+// - NUEVO: Comando "historias" para actualizar configuración
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -55,12 +58,16 @@ const CONFIG = {
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
     tiempo_espera_grupos: 30000,
     // ============================================
-    // NUEVOS PARÁMETROS PARA HISTORIAS (valores por defecto)
+    // PARÁMETROS PARA HISTORIAS
     // ============================================
     horario_historias: '22:00-05:00',
     dias_historias: 'L,M,MI,J,V,S,D',
     intervalo_historias_min: 5,
-    intervalo_historias_max: 10
+    intervalo_historias_max: 10,
+    // ============================================
+    // NUEVO: Número de Administrador
+    // ============================================
+    numero_admin: ''
 };
 
 // Crear carpetas necesarias
@@ -336,7 +343,7 @@ function pedirNumeroSilencioso() {
 }
 
 // ============================================
-// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS (AQUÍ ESTÁ EL CAMBIO)
+// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS
 // ============================================
 async function consultarTodosLosGrupos(url) {
     try {
@@ -356,9 +363,7 @@ async function consultarTodosLosGrupos(url) {
                 }
             }
             
-            // ============================================
-            // NUEVO: Leer parámetros para Historias
-            // ============================================
+            // --- Parámetros para Historias ---
             const horarioHistorias = data.config.HORARIO_HISTORIAS;
             if (horarioHistorias) {
                 CONFIG.horario_historias = horarioHistorias;
@@ -379,6 +384,17 @@ async function consultarTodosLosGrupos(url) {
                     CONFIG.intervalo_historias_max = partes[1];
                     console.log(`⏱️  Intervalo historias configurado: ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} minutos`);
                 }
+            }
+            
+            // ============================================
+            // NUEVO: Leer número de administrador
+            // ============================================
+            const numeroAdmin = data.config.NUMERO_ADMIN;
+            if (numeroAdmin && numeroAdmin !== 'PENDIENTE') {
+                CONFIG.numero_admin = numeroAdmin;
+                console.log(`👑 Número administrador configurado: ${CONFIG.numero_admin}`);
+            } else {
+                console.log(`⚠️ Número administrador no configurado en Sheets (valor: PENDIENTE)`);
             }
         }
         
@@ -1002,7 +1018,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.2 (LECTURA PARÁMETROS HISTORIAS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 28.1 (ADMINISTRADOR Y COMANDO HISTORIAS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1015,11 +1031,13 @@ async function iniciarWhatsApp() {
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
-    console.log('📊 NUEVO: Leyendo parámetros para Historias desde Google Sheets');
+    console.log('📊 Parámetros para Historias: leyendo desde Google Sheets');
+    console.log('👑 NUEVO: Número Administrador - Solo comandos críticos para admin');
+    console.log('🆕 NUEVO: Comando "historias" para actualizar configuración');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
+    console.log('🆕 Comandos disponibles: "actualizar", "status", "listagrupos", "historias"\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1162,7 +1180,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // CORRECCIÓN DE LATENCIA: Evento de mensajes mejorado
+        // CORRECCIÓN DE LATENCIA + VALIDACIÓN DE ADMIN
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             // Solo procesar mensajes nuevos (type === 'notify')
@@ -1188,7 +1206,7 @@ async function iniciarWhatsApp() {
             }
 
             // Ignorar mensajes antiguos (buffer)
-            const ahora = Date.now() / 1000; // Convertir a segundos
+            const ahora = Date.now() / 1000;
             if (mensaje.messageTimestamp && (ahora - mensaje.messageTimestamp) > 5) {
                 guardarLogLocal(`   ⏭️ Ignorando mensaje antiguo (buffer) de ${remitente?.split('@')[0]}: "${texto.substring(0, 30)}..."`);
                 return;
@@ -1199,6 +1217,17 @@ async function iniciarWhatsApp() {
                 const cmd = texto.toLowerCase().trim();
                 guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
                 
+                // ============================================
+                // VERIFICAR SI ES ADMINISTRADOR
+                // ============================================
+                const esAdmin = (remitente.split('@')[0] === CONFIG.numero_admin);
+                
+                if (!esAdmin && (cmd !== 'status')) {
+                    guardarLogLocal(`   ⚠️ Comando ignorado: usuario no es administrador`);
+                    return;
+                }
+                
+                // --- COMANDO: actualizar (solo admin) ---
                 if (cmd === 'actualizar' || cmd === 'update') {
                     guardarLogLocal(`   Procesando comando: actualizar`);
                     const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
@@ -1209,6 +1238,7 @@ async function iniciarWhatsApp() {
                     }
                 }
                 
+                // --- COMANDO: status (público) ---
                 else if (cmd === 'status' || cmd === 'estado') {
                     guardarLogLocal(`   Procesando comando: status`);
                     const agenda = cargarAgendaLocal();
@@ -1231,18 +1261,17 @@ async function iniciarWhatsApp() {
                                   `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
                                   `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                   `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
-                                  // ============================================
-                                  // NUEVO: Mostrar parámetros de Historias en Status
-                                  // ============================================
                                   `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
+                                  `👑  Admin: ${CONFIG.numero_admin || 'No configurado'}\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                  `📤 Comando listagrupos: disponible (con caché)\n` +
+                                  `📤 Comandos: actualizar, listagrupos, historias (solo admin)\n` +
                                   `⏰ Próxima actualización: 6am/6pm`;
                     
                     await sock.sendMessage(remitente, { text: mensaje });
                 }
                 
+                // --- COMANDO: listagrupos (solo admin) ---
                 else if (cmd === 'listagrupos' || cmd === 'grupos') {
                     guardarLogLocal(`   Procesando comando: listagrupos`);
                     
@@ -1267,13 +1296,41 @@ async function iniciarWhatsApp() {
                     
                     await sock.sendMessage(remitente, { text: confirmacion });
                 }
+                
+                // ============================================
+                // NUEVO COMANDO: historias (solo admin)
+                // ============================================
+                else if (cmd === 'historias') {
+                    guardarLogLocal(`   Procesando comando: historias`);
+                    
+                    await sock.sendMessage(remitente, { text: '🔄 Actualizando configuración de Historias desde Google Sheets...' });
+                    
+                    // Forzar lectura de configuración desde Sheets
+                    const data = await consultarTodosLosGrupos(url_sheets);
+                    
+                    if (data && data.config) {
+                        let respuesta = '📋 *CONFIGURACIÓN DE HISTORIAS ACTUALIZADA*\n\n';
+                        respuesta += `🕒 Horario: ${CONFIG.horario_historias}\n`;
+                        respuesta += `📆 Días: ${CONFIG.dias_historias}\n`;
+                        respuesta += `⏱️ Intervalo: ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} minutos\n`;
+                        
+                        if (CONFIG.numero_admin) {
+                            respuesta += `👑 Admin: ${CONFIG.numero_admin}\n`;
+                        }
+                        
+                        await sock.sendMessage(remitente, { text: respuesta });
+                    } else {
+                        await sock.sendMessage(remitente, { text: '❌ Error al leer configuración de Google Sheets' });
+                    }
+                }
             }
         });
 
         console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - Forzar descarga de agenda');
-        console.log('   - "status" - Ver estado del bot (incluye configuración de Historias)');
-        console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
+        console.log('   - "status" - Ver estado del bot (público)');
+        console.log('   - "actualizar" - Forzar descarga de agenda (solo admin)');
+        console.log('   - "listagrupos" - Exporta TODOS los grupos (solo admin)');
+        console.log('   - "historias" - Actualiza configuración de Historias (solo admin)');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
