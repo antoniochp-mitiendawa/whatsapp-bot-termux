@@ -1,14 +1,14 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 18.0 - Envío automático a Google Sheets
+// Versión: 19.0 - Nombres de grupos corregidos (múltiples fuentes)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
-// - Extracción de grupos desde Data Store
-// - NUEVO: Envío automático a Google Sheets al iniciar y cada 12 horas
+// - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
+// - Sincronización automática con Google Sheets al iniciar y cada 12h
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -520,7 +520,7 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER GRUPOS DESDE EL DATA STORE
+// FUNCIÓN PARA OBTENER GRUPOS DESDE EL DATA STORE (CORREGIDA)
 // ============================================
 async function obtenerGruposDesdeStore() {
     try {
@@ -538,10 +538,39 @@ async function obtenerGruposDesdeStore() {
         
         guardarLogLocal(`   Chats filtrados como grupos: ${grupos.length}`);
         
-        const listaGrupos = grupos.map(chat => ({
-            id: chat.id,
-            nombre: chat.name || chat.subject || 'Sin nombre'
-        }));
+        // ============================================
+        // CORRECCIÓN: Buscar el nombre en múltiples campos
+        // ============================================
+        const listaGrupos = grupos.map(chat => {
+            // Intentar obtener el nombre de diferentes lugares
+            let nombreGrupo = 'Sin nombre';
+            
+            // Opción 1: chat.name (campo común en store)
+            if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
+                nombreGrupo = chat.name;
+            }
+            // Opción 2: chat.subject (campo común en metadatos)
+            else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
+                nombreGrupo = chat.subject;
+            }
+            // Opción 3: chat.metadata?.subject (si existe metadata)
+            else if (chat.metadata && chat.metadata.subject) {
+                nombreGrupo = chat.metadata.subject;
+            }
+            // Opción 4: chat.metadata?.name (si existe metadata con name)
+            else if (chat.metadata && chat.metadata.name) {
+                nombreGrupo = chat.metadata.name;
+            }
+            // Opción 5: chat.title (algunas versiones usan title)
+            else if (chat.title) {
+                nombreGrupo = chat.title;
+            }
+            
+            return {
+                id: chat.id,
+                nombre: nombreGrupo
+            };
+        });
         
         guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados en Data Store`);
         return listaGrupos;
@@ -553,7 +582,7 @@ async function obtenerGruposDesdeStore() {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: SINCRONIZAR GRUPOS CON GOOGLE SHEETS
+// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
 // ============================================
 async function sincronizarGruposConSheets(url_sheets) {
     try {
@@ -615,6 +644,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
     try {
         let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
         grupos.forEach(g => {
+            // Escapar comas en el nombre si es necesario
             const nombreEscapado = g.nombre.includes(',') ? `"${g.nombre}"` : g.nombre;
             csvContent += `${g.id},${nombreEscapado}\n`;
         });
@@ -642,13 +672,14 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 18.0 (SINCRONIZACIÓN AUTOMÁTICA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 19.0 (NOMBRES CORREGIDOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
+    console.log('🏷️  Nombres de grupos: búsqueda en múltiples campos');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -750,9 +781,7 @@ async function iniciarWhatsApp() {
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
                 }
                 
-                // ============================================
-                // NUEVO: Sincronización automática al conectar
-                // ============================================
+                // Sincronización automática al conectar
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
                 await sincronizarGruposConSheets(url_sheets);
             }
@@ -772,9 +801,7 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // ============================================
-        // PROGRAMAR SINCRONIZACIÓN CADA 12 HORAS
-        // ============================================
+        // Programar sincronización cada 12 horas
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
             const expresionCron = `${minutos} ${horas} * * *`;
@@ -835,6 +862,7 @@ async function iniciarWhatsApp() {
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                      `🏷️  Nombres de grupos: búsqueda múltiple\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (desde store)\n` +
