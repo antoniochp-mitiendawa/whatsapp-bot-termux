@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.0 - SIN FILTRO DE TIMESTAMP
+// Versión: 27.0 - SIN FILTRO DE TIPO DE MENSAJE
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -972,11 +972,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (con corrección de latencia)
+// INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (SIN FILTRO DE TIMESTAMP)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (SIN FILTRO DE TIPO)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1135,14 +1135,10 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // CORRECCIÓN DE LATENCIA: Evento de mensajes mejorado
+        // EVENTO DE MENSAJES - SIN FILTRO DE TIPO
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
-            // Solo procesar mensajes nuevos (type === 'notify')
-            if (m.type !== 'notify') {
-                guardarLogLocal(`   ⏭️ Ignorando mensaje tipo "${m.type}" (no es notificación nueva)`);
-                return;
-            }
+            // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
             
             const mensaje = m.messages[0];
             
@@ -1163,7 +1159,6 @@ async function iniciarWhatsApp() {
             // ============================================
             // FILTRO DE TIMESTAMP ELIMINADO
             // ============================================
-            // Ya no se ignoran mensajes por antigüedad
             
             // Solo responder a mensajes PRIVADOS
             if (remitente && !remitente.includes('@g.us') && texto) {
