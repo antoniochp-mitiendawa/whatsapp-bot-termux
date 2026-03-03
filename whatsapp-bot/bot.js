@@ -1,12 +1,11 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 14.2 - Caché local de imágenes con limpieza automática
+// Versión: 15.0 - Usando highQualityThumbnail nativo de Baileys
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
-// - Link Previews: título/descripción con Baileys, imagen con caché local
-// - Las imágenes se guardan en cache/ y se eliminan al finalizar cada lote
+// - Link Previews: título/descripción con Baileys, imagen con highQualityThumbnail nativo
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -39,7 +38,7 @@ const CONFIG = {
     tiempo_entre_mensajes_max: 5,
     tiempo_typing: 3000,
     carpeta_logs: './logs',
-    carpeta_cache: './cache', // Nueva carpeta para imágenes temporales
+    carpeta_cache: './cache',
     numero_telefono: '',
     horarios_actualizacion: ['06:00', '18:00']
 };
@@ -266,21 +265,50 @@ function generarHashURL(url) {
 }
 
 // ============================================
+// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
+// (MANTENIDA POR SI ACASO, PERO YA NO ES LA PRINCIPAL)
+// ============================================
+async function obtenerUrlImagenPreview(url) {
+    try {
+        guardarLogLocal(`   🔍 Buscando imagen para: ${url}`);
+        
+        const previewData = await getLinkPreview(url, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            followRedirects: 'follow' // CORREGIDO: ahora usa 'follow' en lugar de true
+        });
+        
+        if (previewData.images && previewData.images.length > 0) {
+            const imagenUrl = previewData.images[0];
+            guardarLogLocal(`   🖼️ URL de imagen encontrada: ${imagenUrl.substring(0, 50)}...`);
+            return imagenUrl;
+        }
+        
+        guardarLogLocal('   ⚠️ No se encontraron imágenes');
+        return null;
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error obteniendo URL de imagen: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
 // FUNCIÓN PARA OBTENER IMAGEN CON CACHÉ LOCAL
+// (MANTENIDA PARA COMPATIBILIDAD, PERO YA NO ES LA PRINCIPAL)
 // ============================================
 async function obtenerImagenConCache(url) {
     try {
-        // Generar hash de la URL para nombre de archivo
         const hash = generarHashURL(url);
         const rutaImagen = path.join(CONFIG.carpeta_cache, `${hash}.jpg`);
         
-        // Verificar si ya existe en caché
         if (fs.existsSync(rutaImagen)) {
             guardarLogLocal(`   🖼️ Imagen encontrada en caché local`);
             return fs.readFileSync(rutaImagen);
         }
         
-        // No existe, descargar y guardar
         guardarLogLocal(`   ⬇️ Descargando imagen a caché local...`);
         
         const response = await axios({
@@ -294,11 +322,7 @@ async function obtenerImagenConCache(url) {
         });
         
         const buffer = Buffer.from(response.data);
-        
-        // Guardar en caché
         fs.writeFileSync(rutaImagen, buffer);
-        
-        // Registrar para limpieza posterior
         imagenesUsadasEnLote.add(rutaImagen);
         
         guardarLogLocal(`   ✅ Imagen guardada en caché: ${hash}.jpg`);
@@ -325,9 +349,7 @@ function limpiarCacheImagenes() {
                 if (fs.existsSync(ruta)) {
                     fs.unlinkSync(ruta);
                 }
-            } catch (e) {
-                // Ignorar errores individuales
-            }
+            } catch (e) {}
         }
         
         imagenesUsadasEnLote.clear();
@@ -339,37 +361,7 @@ function limpiarCacheImagenes() {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
-// ============================================
-async function obtenerUrlImagenPreview(url) {
-    try {
-        guardarLogLocal(`   🔍 Buscando imagen para: ${url}`);
-        
-        const previewData = await getLinkPreview(url, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            followRedirects: true
-        });
-        
-        if (previewData.images && previewData.images.length > 0) {
-            const imagenUrl = previewData.images[0];
-            guardarLogLocal(`   🖼️ URL de imagen encontrada: ${imagenUrl.substring(0, 50)}...`);
-            return imagenUrl;
-        }
-        
-        guardarLogLocal('   ⚠️ No se encontraron imágenes');
-        return null;
-        
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error obteniendo URL de imagen: ${error.message}`);
-        return null;
-    }
-}
-
-// ============================================
-// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW COMPLETO Y CACHÉ)
+// ENVIAR MENSAJE A GRUPO (CON LINK PREVIEW USANDO HIGHQUALITYTHUMBNAIL)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensaje) {
     try {
@@ -387,7 +379,7 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
         if (urls.length > 0) {
             guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
             
-            // PASO 1: Usar getUrlInfo de Baileys para obtener título y descripción
+            // PASO 1: Usar getUrlInfo de Baileys para obtener TODO (título, descripción Y highQualityThumbnail)
             const linkPreview = await getUrlInfo(urls[0], {
                 thumbnailWidth: 2400,
                 fetchOpts: {
@@ -400,24 +392,17 @@ async function enviarMensaje(sock, id_grupo, mensaje) {
             });
             
             if (linkPreview) {
-                // PASO 2: Obtener URL de la imagen
-                const imagenUrl = await obtenerUrlImagenPreview(urls[0]);
-                
-                // PASO 3: Si hay URL de imagen, obtener buffer (con caché)
-                let imagenBuffer = null;
-                if (imagenUrl) {
-                    imagenBuffer = await obtenerImagenConCache(imagenUrl);
-                }
-                
-                // PASO 4: Construir el objeto final
-                opciones.linkPreview = {
-                    ...linkPreview,
-                    jpegThumbnail: imagenBuffer || linkPreview.jpegThumbnail
-                };
+                // PASO 2: Usar el objeto COMPLETO que devuelve getUrlInfo
+                // Esto incluye highQualityThumbnail que es un ImageMessage nativo de WhatsApp
+                opciones.linkPreview = linkPreview;
                 
                 guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
-                if (imagenBuffer) {
-                    guardarLogLocal(`   🖼️ Imagen añadida al preview (desde caché)`);
+                
+                // Verificar si tiene highQualityThumbnail (imagen nativa)
+                if (linkPreview.highQualityThumbnail) {
+                    guardarLogLocal(`   🖼️ Usando highQualityThumbnail nativo de Baileys`);
+                } else if (linkPreview.jpegThumbnail) {
+                    guardarLogLocal(`   🖼️ Usando jpegThumbnail estándar`);
                 }
                 
                 // Pequeño delay para asegurar procesamiento
@@ -516,7 +501,6 @@ async function verificarMensajesLocales(sock) {
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR: ${error.message}`);
-        // En caso de error, intentar limpiar de todas formas
         limpiarCacheImagenes();
     }
 }
@@ -640,12 +624,12 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 14.2 (CACHÉ LOCAL DE IMÁGENES)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 15.0 (HIGHQUALITYTHUMBNAIL NATIVO)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
-    console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
+    console.log('🔗 Link Previews: Usando highQualityThumbnail nativo de Baileys');
+    console.log('🗑️  Caché local mantenido por compatibilidad');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
@@ -804,8 +788,8 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                      `🗑️  Limpieza automática: activada\n` +
+                                      `🔗 Link Previews: HIGHQUALITYTHUMBNAIL NATIVO\n` +
+                                      `🗑️  Caché local: mantenido por compatibilidad\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
@@ -855,7 +839,6 @@ async function iniciarWhatsApp() {
 process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
-    // Limpiar caché al cerrar
     limpiarCacheImagenes();
     process.exit(0);
 });
