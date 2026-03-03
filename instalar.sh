@@ -32,11 +32,13 @@ echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
 
-# PASO 4: Instalar dependencias
+# PASO 4: Instalar dependencias (AQUÍ ESTÁ EL CAMBIO)
 echo ""
 echo " PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
+
+# --- Librerías normales ---
 npm install @whiskeysockets/baileys
 npm install @hapi/boom
 npm install qrcode-terminal
@@ -44,6 +46,9 @@ npm install node-cron
 npm install axios
 npm install pino
 npm install link-preview-js
+
+# --- NUEVA LIBRERÍA: Para el Data Store ---
+npm install @rodrigogs/baileys-store
 
 echo ""
 echo "===================================="
