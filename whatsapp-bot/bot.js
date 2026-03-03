@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.0 - CORRECCIÓN DE LATENCIA EN MENSAJES
+// Versión: 27.2 - LECTURA DE PARÁMETROS PARA HISTORIAS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -8,7 +8,6 @@
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
-// - NUEVO: Corrección de latencia - procesa mensajes inmediatamente
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
 // - Limpieza automática del Data Store (mensajes > 30 días)
 // - Soporte multimedia: imágenes, audios, videos, documentos
@@ -19,6 +18,7 @@
 // - Comandos "actualizar", "status" y "listagrupos" desde WhatsApp
 // - Cache de grupos para mejor rendimiento
 // - Logs solo locales
+// - NUEVO: Lectura de parámetros para Historias (HORARIO_HISTORIAS, DIAS_HISTORIAS, INTERVALO_HISTORIAS)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -53,7 +53,14 @@ const CONFIG = {
     horarios_actualizacion: ['06:00', '18:00'],
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-    tiempo_espera_grupos: 30000
+    tiempo_espera_grupos: 30000,
+    // ============================================
+    // NUEVOS PARÁMETROS PARA HISTORIAS (valores por defecto)
+    // ============================================
+    horario_historias: '22:00-05:00',
+    dias_historias: 'L,M,MI,J,V,S,D',
+    intervalo_historias_min: 5,
+    intervalo_historias_max: 10
 };
 
 // Crear carpetas necesarias
@@ -329,7 +336,7 @@ function pedirNumeroSilencioso() {
 }
 
 // ============================================
-// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS
+// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS (AQUÍ ESTÁ EL CAMBIO)
 // ============================================
 async function consultarTodosLosGrupos(url) {
     try {
@@ -338,21 +345,40 @@ async function consultarTodosLosGrupos(url) {
         const data = respuesta.data;
         
         if (data.config) {
+            // --- Parámetros existentes ---
             const delayStr = data.config.TIEMPO_ENTRE_MENSAJES;
             if (delayStr && typeof delayStr === 'string' && delayStr.includes('-')) {
                 const partes = delayStr.split('-').map(p => parseInt(p.trim()));
                 if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
                     CONFIG.tiempo_entre_mensajes_min = partes[0];
                     CONFIG.tiempo_entre_mensajes_max = partes[1];
-                    console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (formato min-max)`);
-                } else {
-                    console.log(`⚠️  Formato de delay inválido: ${delayStr}, usando valores por defecto`);
+                    console.log(`⏱️  Delay mensajes configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos`);
                 }
-            } else if (delayStr && !isNaN(parseInt(delayStr))) {
-                const valor = parseInt(delayStr);
-                CONFIG.tiempo_entre_mensajes_min = 1;
-                CONFIG.tiempo_entre_mensajes_max = valor;
-                console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (convertido desde valor único)`);
+            }
+            
+            // ============================================
+            // NUEVO: Leer parámetros para Historias
+            // ============================================
+            const horarioHistorias = data.config.HORARIO_HISTORIAS;
+            if (horarioHistorias) {
+                CONFIG.horario_historias = horarioHistorias;
+                console.log(`📅 Horario historias configurado: ${CONFIG.horario_historias}`);
+            }
+            
+            const diasHistorias = data.config.DIAS_HISTORIAS;
+            if (diasHistorias) {
+                CONFIG.dias_historias = diasHistorias;
+                console.log(`📆 Días historias configurados: ${CONFIG.dias_historias}`);
+            }
+            
+            const intervaloStr = data.config.INTERVALO_HISTORIAS;
+            if (intervaloStr && typeof intervaloStr === 'string' && intervaloStr.includes('-')) {
+                const partes = intervaloStr.split('-').map(p => parseInt(p.trim()));
+                if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
+                    CONFIG.intervalo_historias_min = partes[0];
+                    CONFIG.intervalo_historias_max = partes[1];
+                    console.log(`⏱️  Intervalo historias configurado: ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} minutos`);
+                }
             }
         }
         
@@ -972,11 +998,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (con corrección de latencia)
+// INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CORRECCIÓN DE LATENCIA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.2 (LECTURA PARÁMETROS HISTORIAS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -989,6 +1015,7 @@ async function iniciarWhatsApp() {
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
+    console.log('📊 NUEVO: Leyendo parámetros para Historias desde Google Sheets');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1160,9 +1187,7 @@ async function iniciarWhatsApp() {
                 return;
             }
 
-            // ============================================
-            // NUEVA VERIFICACIÓN: Ignorar mensajes antiguos (buffer)
-            // ============================================
+            // Ignorar mensajes antiguos (buffer)
             const ahora = Date.now() / 1000; // Convertir a segundos
             if (mensaje.messageTimestamp && (ahora - mensaje.messageTimestamp) > 5) {
                 guardarLogLocal(`   ⏭️ Ignorando mensaje antiguo (buffer) de ${remitente?.split('@')[0]}: "${texto.substring(0, 30)}..."`);
@@ -1196,7 +1221,7 @@ async function iniciarWhatsApp() {
                                   `📋 Grupos totales: ${total}\n` +
                                   `✅ Grupos activos: ${activos}\n` +
                                   `📌 Pestañas: ${pestanas}\n` +
-                                  `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                  `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                   `✍️  Typing adaptativo: activado\n` +
                                   `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                   `📚 Data Store: ACTIVADO (extracción local)\n` +
@@ -1206,6 +1231,10 @@ async function iniciarWhatsApp() {
                                   `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
                                   `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                   `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                  // ============================================
+                                  // NUEVO: Mostrar parámetros de Historias en Status
+                                  // ============================================
+                                  `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
@@ -1243,7 +1272,7 @@ async function iniciarWhatsApp() {
 
         console.log('\n📝 Comandos disponibles en WhatsApp:');
         console.log('   - "actualizar" - Forzar descarga de agenda');
-        console.log('   - "status" - Ver estado del bot');
+        console.log('   - "status" - Ver estado del bot (incluye configuración de Historias)');
         console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
