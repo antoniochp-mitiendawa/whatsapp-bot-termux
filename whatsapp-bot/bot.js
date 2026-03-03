@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 20.0 - Nombres con consulta directa a WhatsApp
+// Versión: 21.0 - Limpieza automática del Data Store (30 días)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -8,8 +8,9 @@
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
-// - NUEVO: Si el nombre no se encuentra, se consulta directamente a WhatsApp con groupMetadata
+// - Consulta directa a WhatsApp si el nombre no se encuentra en el store
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
+// - NUEVO: Limpieza automática del Data Store (mensajes > 30 días)
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -49,7 +50,11 @@ const CONFIG = {
     carpeta_logs: './logs',
     carpeta_cache: './cache',
     numero_telefono: '',
-    horarios_actualizacion: ['06:00', '18:00']
+    horarios_actualizacion: ['06:00', '18:00'],
+    // ============================================
+    // NUEVA CONFIGURACIÓN: Días de retención del store
+    // ============================================
+    dias_retencion_store: 30
 };
 
 // Crear carpetas necesarias
@@ -87,6 +92,67 @@ const groupCache = new Map();
 
 // Variable para llevar registro de imágenes usadas en el lote actual
 let imagenesUsadasEnLote = new Set();
+
+// ============================================
+// NUEVA FUNCIÓN: Limpiar mensajes antiguos del Data Store
+// ============================================
+function limpiarStoreAntiguo() {
+    try {
+        guardarLogLocal('🧹 Iniciando limpieza automática del Data Store...');
+        
+        if (!store || !store.chats) {
+            guardarLogLocal('⚠️ Data Store no disponible para limpiar');
+            return false;
+        }
+        
+        // Calcular fecha límite (hoy - días_retencion_store)
+        const fechaLimite = new Date();
+        fechaLimite.setDate(fechaLimite.getDate() - CONFIG.dias_retencion_store);
+        const timestampLimite = fechaLimite.getTime();
+        
+        guardarLogLocal(`   Conservando mensajes posteriores a: ${fechaLimite.toLocaleDateString()}`);
+        
+        // Obtener todos los chats
+        const chats = store.chats.all() || [];
+        let mensajesEliminados = 0;
+        
+        chats.forEach(chat => {
+            if (!chat.messages) return;
+            
+            // Filtrar mensajes: conservar solo los más recientes que la fecha límite
+            const mensajesOriginales = Array.from(chat.messages.values());
+            const mensajesConservar = mensajesOriginales.filter(msg => {
+                const msgTimestamp = msg.messageTimestamp * 1000; // Convertir a milisegundos
+                return msgTimestamp >= timestampLimite;
+            });
+            
+            mensajesEliminados += mensajesOriginales.length - mensajesConservar.length;
+            
+            // Reconstruir el mapa de mensajes
+            if (mensajesConservar.length > 0) {
+                const nuevoMapa = new Map();
+                mensajesConservar.forEach(msg => {
+                    if (msg.key && msg.key.id) {
+                        nuevoMapa.set(msg.key.id, msg);
+                    }
+                });
+                chat.messages = nuevoMapa;
+            } else {
+                chat.messages = new Map();
+            }
+        });
+        
+        // Guardar los cambios en el archivo
+        store.writeToFile(CONFIG.archivo_store);
+        
+        guardarLogLocal(`✅ Limpieza completada: ${mensajesEliminados} mensajes antiguos eliminados`);
+        return true;
+        
+    } catch (error) {
+        guardarLogLocal(`❌ Error en limpieza del store: ${error.message}`);
+        return false;
+    }
+}
 
 // ============================================
 // LEER URL DE GOOGLE SHEETS
@@ -521,7 +587,7 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN MODIFICADA: OBTENER GRUPOS DESDE EL DATA STORE CON CONSULTA DIRECTA A WHATSAPP
+// FUNCIÓN PARA OBTENER GRUPOS DESDE EL DATA STORE
 // ============================================
 async function obtenerGruposDesdeStore(sock) {
     try {
@@ -544,9 +610,7 @@ async function obtenerGruposDesdeStore(sock) {
         for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
             
-            // ============================================
-            // PASO 1: Buscar en el store (lo que ya funcionaba)
-            // ============================================
+            // Buscar en el store (lo que ya funcionaba)
             if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
                 nombreGrupo = chat.name;
             }
@@ -563,9 +627,7 @@ async function obtenerGruposDesdeStore(sock) {
                 nombreGrupo = chat.title;
             }
             
-            // ============================================
-            // PASO 2: Si sigue siendo "Sin nombre", preguntar directamente a WhatsApp
-            // ============================================
+            // Si sigue siendo "Sin nombre", preguntar directamente a WhatsApp
             if (nombreGrupo === 'Sin nombre' && sock) {
                 guardarLogLocal(`   ⚠️ Grupo sin nombre en store, consultando a WhatsApp: ${chat.id}`);
                 try {
@@ -595,13 +657,12 @@ async function obtenerGruposDesdeStore(sock) {
 }
 
 // ============================================
-// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS (MODIFICADA)
+// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
 // ============================================
 async function sincronizarGruposConSheets(sock, url_sheets) {
     try {
         guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
         
-        // Pasamos sock a la función para que pueda consultar a WhatsApp si es necesario
         const grupos = await obtenerGruposDesdeStore(sock);
         
         if (grupos.length === 0) {
@@ -628,7 +689,7 @@ async function sincronizarGruposConSheets(sock, url_sheets) {
 }
 
 // ============================================
-// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS (MODIFICADA)
+// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS
 // ============================================
 async function enviarGruposASheets(sock, url_sheets, grupos) {
     try {
@@ -658,7 +719,6 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
     try {
         let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
         grupos.forEach(g => {
-            // Escapar comas en el nombre si es necesario
             const nombreEscapado = g.nombre.includes(',') ? `"${g.nombre}"` : g.nombre;
             csvContent += `${g.id},${nombreEscapado}\n`;
         });
@@ -686,14 +746,15 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 20.0 (NOMBRES CONSULTADOS DIRECTAMENTE)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 21.0 (LIMPIEZA AUTOMÁTICA STORE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
-    console.log('🏷️  Nombres de grupos: búsqueda en store + consulta directa a WhatsApp');
+    console.log('🏷️  Nombres de grupos: búsqueda en store + consulta directa');
+    console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -789,13 +850,17 @@ async function iniciarWhatsApp() {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
                 guardarLogLocal('CONEXIÓN EXITOSA');
                 
+                // ============================================
+                // NUEVO: Ejecutar limpieza del store al conectar
+                // ============================================
+                limpiarStoreAntiguo();
+                
                 const agenda = cargarAgendaLocal();
                 if (agenda.grupos.length === 0) {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
                 }
                 
-                // Sincronización automática al conectar (pasamos sock)
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
                 await sincronizarGruposConSheets(sock, url_sheets);
             }
@@ -815,7 +880,13 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Programar sincronización cada 12 horas (pasamos sock)
+        // Programar limpieza del store CADA DÍA a las 3:00 AM
+        cron.schedule('0 3 * * *', async () => {
+            guardarLogLocal('⏰ Ejecutando limpieza programada del Data Store (3 AM)');
+            limpiarStoreAntiguo();
+        });
+
+        // Programar sincronización cada 12 horas
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
             const expresionCron = `${minutos} ${horas} * * *`;
@@ -877,6 +948,7 @@ async function iniciarWhatsApp() {
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                       `🏷️  Nombres de grupos: búsqueda múltiple + consulta directa\n` +
+                                      `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (desde store)\n` +
@@ -890,7 +962,6 @@ async function iniciarWhatsApp() {
                         
                         await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos desde Data Store...' });
                         
-                        // Pasamos sock a la función para que pueda consultar a WhatsApp si es necesario
                         const grupos = await obtenerGruposDesdeStore(sock);
                         
                         if (grupos.length === 0) {
