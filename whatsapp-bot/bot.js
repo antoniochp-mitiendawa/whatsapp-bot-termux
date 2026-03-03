@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 19.0 - Nombres de grupos corregidos (múltiples fuentes)
+// Versión: 20.0 - Nombres con consulta directa a WhatsApp
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -8,6 +8,7 @@
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
+// - NUEVO: Si el nombre no se encuentra, se consulta directamente a WhatsApp con groupMetadata
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
@@ -520,9 +521,9 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER GRUPOS DESDE EL DATA STORE (CORREGIDA)
+// FUNCIÓN MODIFICADA: OBTENER GRUPOS DESDE EL DATA STORE CON CONSULTA DIRECTA A WHATSAPP
 // ============================================
-async function obtenerGruposDesdeStore() {
+async function obtenerGruposDesdeStore(sock) {
     try {
         guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
         
@@ -538,41 +539,53 @@ async function obtenerGruposDesdeStore() {
         
         guardarLogLocal(`   Chats filtrados como grupos: ${grupos.length}`);
         
-        // ============================================
-        // CORRECCIÓN: Buscar el nombre en múltiples campos
-        // ============================================
-        const listaGrupos = grupos.map(chat => {
-            // Intentar obtener el nombre de diferentes lugares
+        const listaGrupos = [];
+        
+        for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
             
-            // Opción 1: chat.name (campo común en store)
+            // ============================================
+            // PASO 1: Buscar en el store (lo que ya funcionaba)
+            // ============================================
             if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
                 nombreGrupo = chat.name;
             }
-            // Opción 2: chat.subject (campo común en metadatos)
             else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
                 nombreGrupo = chat.subject;
             }
-            // Opción 3: chat.metadata?.subject (si existe metadata)
             else if (chat.metadata && chat.metadata.subject) {
                 nombreGrupo = chat.metadata.subject;
             }
-            // Opción 4: chat.metadata?.name (si existe metadata con name)
             else if (chat.metadata && chat.metadata.name) {
                 nombreGrupo = chat.metadata.name;
             }
-            // Opción 5: chat.title (algunas versiones usan title)
             else if (chat.title) {
                 nombreGrupo = chat.title;
             }
             
-            return {
+            // ============================================
+            // PASO 2: Si sigue siendo "Sin nombre", preguntar directamente a WhatsApp
+            // ============================================
+            if (nombreGrupo === 'Sin nombre' && sock) {
+                guardarLogLocal(`   ⚠️ Grupo sin nombre en store, consultando a WhatsApp: ${chat.id}`);
+                try {
+                    const metadata = await sock.groupMetadata(chat.id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                        guardarLogLocal(`   ✅ Nombre obtenido de WhatsApp: ${nombreGrupo}`);
+                    }
+                } catch (error) {
+                    guardarLogLocal(`   ❌ Error consultando grupo a WhatsApp: ${error.message}`);
+                }
+            }
+            
+            listaGrupos.push({
                 id: chat.id,
                 nombre: nombreGrupo
-            };
-        });
+            });
+        }
         
-        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados en Data Store`);
+        guardarLogLocal(`✅ ${listaGrupos.length} grupos procesados`);
         return listaGrupos;
         
     } catch (error) {
@@ -582,13 +595,14 @@ async function obtenerGruposDesdeStore() {
 }
 
 // ============================================
-// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
+// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS (MODIFICADA)
 // ============================================
-async function sincronizarGruposConSheets(url_sheets) {
+async function sincronizarGruposConSheets(sock, url_sheets) {
     try {
         guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
         
-        const grupos = await obtenerGruposDesdeStore();
+        // Pasamos sock a la función para que pueda consultar a WhatsApp si es necesario
+        const grupos = await obtenerGruposDesdeStore(sock);
         
         if (grupos.length === 0) {
             guardarLogLocal('⚠️ No hay grupos para sincronizar');
@@ -614,9 +628,9 @@ async function sincronizarGruposConSheets(url_sheets) {
 }
 
 // ============================================
-// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS
+// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS (MODIFICADA)
 // ============================================
-async function enviarGruposASheets(url_sheets, grupos) {
+async function enviarGruposASheets(sock, url_sheets, grupos) {
     try {
         guardarLogLocal('📤 Enviando grupos a Google Sheets...');
         
@@ -672,14 +686,14 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 19.0 (NOMBRES CORREGIDOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 20.0 (NOMBRES CONSULTADOS DIRECTAMENTE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
-    console.log('🏷️  Nombres de grupos: búsqueda en múltiples campos');
+    console.log('🏷️  Nombres de grupos: búsqueda en store + consulta directa a WhatsApp');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -781,9 +795,9 @@ async function iniciarWhatsApp() {
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
                 }
                 
-                // Sincronización automática al conectar
+                // Sincronización automática al conectar (pasamos sock)
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
-                await sincronizarGruposConSheets(url_sheets);
+                await sincronizarGruposConSheets(sock, url_sheets);
             }
 
             if (connection === 'close') {
@@ -801,14 +815,14 @@ async function iniciarWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Programar sincronización cada 12 horas
+        // Programar sincronización cada 12 horas (pasamos sock)
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
             const expresionCron = `${minutos} ${horas} * * *`;
             
             cron.schedule(expresionCron, async () => {
                 guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
-                await sincronizarGruposConSheets(url_sheets);
+                await sincronizarGruposConSheets(sock, url_sheets);
             });
         });
 
@@ -862,7 +876,7 @@ async function iniciarWhatsApp() {
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                      `🏷️  Nombres de grupos: búsqueda múltiple\n` +
+                                      `🏷️  Nombres de grupos: búsqueda múltiple + consulta directa\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (desde store)\n` +
@@ -876,14 +890,15 @@ async function iniciarWhatsApp() {
                         
                         await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos desde Data Store...' });
                         
-                        const grupos = await obtenerGruposDesdeStore();
+                        // Pasamos sock a la función para que pueda consultar a WhatsApp si es necesario
+                        const grupos = await obtenerGruposDesdeStore(sock);
                         
                         if (grupos.length === 0) {
                             await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos en el Data Store. Asegúrate de que el bot esté en al menos un grupo.' });
                             return;
                         }
                         
-                        const sheetsResult = await enviarGruposASheets(url_sheets, grupos);
+                        const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
                         
                         const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
                         
@@ -891,7 +906,7 @@ async function iniciarWhatsApp() {
                         confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
                         confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                         confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                        confirmacion += `📚 Fuente: Data Store local`;
+                        confirmacion += `📚 Fuente: Data Store local + consultas directas`;
                         
                         await sock.sendMessage(remitente, { text: confirmacion });
                     }
