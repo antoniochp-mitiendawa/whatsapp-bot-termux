@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.0 - CORRECCIÓN DE LATENCIA EN MENSAJES
+// Versión: 27.0 - SIN FILTRO DE TIMESTAMP
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -976,7 +976,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CORRECCIÓN DE LATENCIA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (SIN FILTRO DE TIMESTAMP)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1161,13 +1161,9 @@ async function iniciarWhatsApp() {
             }
 
             // ============================================
-            // NUEVA VERIFICACIÓN: Ignorar mensajes antiguos (buffer)
+            // FILTRO DE TIMESTAMP ELIMINADO
             // ============================================
-            const ahora = Date.now() / 1000; // Convertir a segundos
-            if (mensaje.messageTimestamp && (ahora - mensaje.messageTimestamp) > 5) {
-                guardarLogLocal(`   ⏭️ Ignorando mensaje antiguo (buffer) de ${remitente?.split('@')[0]}: "${texto.substring(0, 30)}..."`);
-                return;
-            }
+            // Ya no se ignoran mensajes por antigüedad
             
             // Solo responder a mensajes PRIVADOS
             if (remitente && !remitente.includes('@g.us') && texto) {
