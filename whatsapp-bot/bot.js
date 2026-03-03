@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 29.1 - CORRECCIÓN DE NÚMERO ADMINISTRADOR
+// Versión: 30.0 - SIN FILTRO DE MENSAJES ANTIGUOS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -23,7 +23,8 @@
 // - Publicación automática de Historias (Stories)
 // - Carpeta /storage/emulated/0/Historias/ creada automáticamente
 // - Control de repeticiones con archivo progreso_historias.json
-// - CORREGIDO: Comparación de número administrador (ahora funciona correctamente)
+// - CORREGIDO: Número administrador normalizado (últimos 10 dígitos)
+// - CORREGIDO: ELIMINADO filtro de mensajes antiguos (los mensajes llegan correctamente)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -126,7 +127,7 @@ const groupCache = new Map();
 let imagenesUsadasEnLote = new Set();
 
 // ============================================
-// NUEVA FUNCIÓN: Normalizar número para comparación
+// FUNCIÓN: Normalizar número para comparación
 // ============================================
 function normalizarNumeroParaComparacion(numero) {
     try {
@@ -1346,7 +1347,7 @@ async function procesarHistorias(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 29.1 (ADMIN CORREGIDO)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 30.0 (SIN FILTRO DE MENSAJES ANTIGUOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1366,6 +1367,7 @@ async function iniciarWhatsApp() {
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
+    console.log('✅ ELIMINADO: Filtro de mensajes antiguos (todos los mensajes se procesan)');
     console.log('🆕 Comandos disponibles:');
     console.log('   - "status" - Ver estado del bot (público)');
     console.log('   - "actualizar" - Forzar descarga de agenda (solo admin)');
@@ -1520,7 +1522,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // CORRECCIÓN DE LATENCIA + VALIDACIÓN DE ADMIN CORREGIDA
+        // EVENTO DE MENSAJES - SIN FILTRO DE TIMESTAMP
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             if (m.type !== 'notify') {
@@ -1539,12 +1541,6 @@ async function iniciarWhatsApp() {
                          mensaje.message.extendedTextMessage?.text || '';
             
             if (!texto || texto.trim() === '') {
-                return;
-            }
-
-            const ahora = Date.now() / 1000;
-            if (mensaje.messageTimestamp && (ahora - mensaje.messageTimestamp) > 5) {
-                guardarLogLocal(`   ⏭️ Ignorando mensaje antiguo (buffer) de ${remitente?.split('@')[0]}: "${texto.substring(0, 30)}..."`);
                 return;
             }
             
