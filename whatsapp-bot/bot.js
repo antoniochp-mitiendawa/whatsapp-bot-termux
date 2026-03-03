@@ -1,12 +1,13 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 16.0 - Con Data Store (PASO 1)
+// Versión: 17.0 - Extracción de grupos desde Data Store
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
+// - NUEVO: Extracción de grupos usando el Data Store (ya no requiere groupFetchAllParticipatingGroups)
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -28,7 +29,7 @@ const pino = require('pino');
 const { getLinkPreview } = require('link-preview-js');
 const crypto = require('crypto');
 // ============================================
-// NUEVA LIBRERÍA PARA DATA STORE
+// LIBRERÍA PARA DATA STORE
 // ============================================
 const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
@@ -39,9 +40,6 @@ const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
     archivo_agenda: './agenda.json',
-    // ============================================
-    // NUEVO: Archivo para el Data Store
-    // ============================================
     archivo_store: './baileys_store.json',
     tiempo_entre_mensajes_min: 1,
     tiempo_entre_mensajes_max: 5,
@@ -64,7 +62,7 @@ if (!fs.existsSync(CONFIG.carpeta_cache)) {
 }
 
 // ============================================
-// NUEVO: INICIALIZAR DATA STORE
+// INICIALIZAR DATA STORE
 // ============================================
 console.log('📚 Inicializando Data Store...');
 const store = makeInMemoryStore({
@@ -521,62 +519,38 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER GRUPOS DE WHATSAPP (ACTUALMENTE CON ERROR)
+// NUEVA FUNCIÓN: OBTENER GRUPOS DESDE EL DATA STORE
 // ============================================
-async function obtenerGruposWhatsApp(sock) {
+async function obtenerGruposDesdeStore() {
     try {
-        guardarLogLocal('🔍 Obteniendo grupos de WhatsApp...');
+        guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
         
-        if (!sock || !sock.user) {
-            guardarLogLocal('❌ Socket no conectado');
+        // Verificar que el store tiene datos
+        if (!store || !store.chats) {
+            guardarLogLocal('❌ Data Store no disponible');
             return [];
         }
         
-        guardarLogLocal('   Consultando grupos...');
+        // Obtener todos los chats del store
+        const todosLosChats = store.chats.all() || [];
+        guardarLogLocal(`   Total de chats en store: ${todosLosChats.length}`);
         
-        const gruposDict = await sock.groupFetchAllParticipatingGroups();
+        // Filtrar solo los grupos (los IDs de grupo terminan en @g.us)
+        const grupos = todosLosChats.filter(chat => chat.id && chat.id.endsWith('@g.us'));
         
-        if (!gruposDict || typeof gruposDict !== 'object') {
-            guardarLogLocal('⚠️ No se obtuvieron grupos o formato inesperado');
-            return [];
-        }
+        guardarLogLocal(`   Chats filtrados como grupos: ${grupos.length}`);
         
-        const listaGrupos = [];
+        // Convertir a formato {id, nombre}
+        const listaGrupos = grupos.map(chat => ({
+            id: chat.id,
+            nombre: chat.name || chat.subject || 'Sin nombre'
+        }));
         
-        for (const [groupId, groupInfo] of Object.entries(gruposDict)) {
-            listaGrupos.push({
-                id: groupId,
-                nombre: groupInfo.subject || 'Sin nombre'
-            });
-            
-            if (typeof groupCache !== 'undefined' && groupCache) {
-                groupCache.set(groupId, groupInfo);
-            }
-        }
-        
-        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados correctamente`);
+        guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados en Data Store`);
         return listaGrupos;
         
     } catch (error) {
-        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
-        
-        try {
-            guardarLogLocal('   Intentando método alternativo con groupMetadata...');
-            
-            const groups = await sock.groupMetadata('');
-            
-            if (groups && Array.isArray(groups) && groups.length > 0) {
-                const listaGrupos = groups.map(g => ({
-                    id: g.id,
-                    nombre: g.subject || 'Sin nombre'
-                }));
-                guardarLogLocal(`✅ ${listaGrupos.length} grupos encontrados (método alternativo)`);
-                return listaGrupos;
-            }
-        } catch (altError) {
-            guardarLogLocal(`   ❌ Método alternativo falló: ${altError.message}`);
-        }
-        
+        guardarLogLocal(`❌ Error obteniendo grupos desde store: ${error.message}`);
         return [];
     }
 }
@@ -639,16 +613,16 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 16.0 (CON DATA STORE)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 17.0 (EXTRACCIÓN DESDE STORE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
-    console.log('📚 Data Store activado (guardando información localmente)');
+    console.log('📚 Data Store activado - Extrayendo grupos localmente');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Comando: "listagrupos" - Exporta todos los grupos a CSV + Sheets\n');
+    console.log('🆕 Comando: "listagrupos" - Exporta grupos desde Data Store a CSV + Sheets\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -692,7 +666,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // NUEVO: VINCULAR EL DATA STORE AL SOCKET
+        // VINCULAR EL DATA STORE AL SOCKET
         // ============================================
         store.bind(sock.ev);
 
@@ -810,10 +784,10 @@ async function iniciarWhatsApp() {
                                       `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                      `📚 Data Store: ACTIVADO\n` +
+                                      `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                      `📤 Comando listagrupos: disponible\n` +
+                                      `📤 Comando listagrupos: disponible (desde store)\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
@@ -822,12 +796,15 @@ async function iniciarWhatsApp() {
                     if (cmd === 'listagrupos' || cmd === 'grupos') {
                         guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: listagrupos`);
                         
-                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos...' });
+                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos desde Data Store...' });
                         
-                        const grupos = await obtenerGruposWhatsApp(sock);
+                        // ============================================
+                        // NUEVO: Usar la función del store en lugar de la antigua
+                        // ============================================
+                        const grupos = await obtenerGruposDesdeStore();
                         
                         if (grupos.length === 0) {
-                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos. Verifica que el bot esté en al menos un grupo.' });
+                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos en el Data Store. Asegúrate de que el bot esté en al menos un grupo.' });
                             return;
                         }
                         
@@ -839,6 +816,7 @@ async function iniciarWhatsApp() {
                         confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
                         confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                         confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
+                        confirmacion += `📚 Fuente: Data Store local`;
                         
                         await sock.sendMessage(remitente, { text: confirmacion });
                     }
@@ -849,7 +827,7 @@ async function iniciarWhatsApp() {
         console.log('\n📝 Comandos disponibles en WhatsApp:');
         console.log('   - "actualizar" - Forzar descarga de agenda');
         console.log('   - "status" - Ver estado del bot');
-        console.log('   - "listagrupos" - Exportar grupos a CSV + Sheets');
+        console.log('   - "listagrupos" - Exporta grupos desde DATA STORE a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
@@ -862,7 +840,6 @@ process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
     limpiarCacheImagenes();
-    // Guardar store antes de salir
     store.writeToFile(CONFIG.archivo_store);
     process.exit(0);
 });
