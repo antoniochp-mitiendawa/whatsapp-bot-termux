@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.0 - CONSULTA MASIVA DE GRUPOS
+// Versión: 27.0 - CONSULTA MASIVA (SIN MODIFICAR EXISTENTE)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -19,7 +19,7 @@
 // - Comandos "actualizar", "status" y "listagrupos" desde WhatsApp
 // - Cache de grupos para mejor rendimiento
 // - Logs solo locales
-// - NUEVO: Consulta masiva de grupos (evita rate limit)
+// - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -734,59 +734,195 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Obtener TODOS los grupos de WhatsApp (consulta masiva)
+// FUNCIÓN PARA OBTENER GRUPOS CON ESPERA (eventos)
 // ============================================
-async function obtenerTodosLosGruposWhatsApp(sock) {
+async function obtenerGruposConEspera(sock) {
+    return new Promise((resolve) => {
+        try {
+            guardarLogLocal('⏳ Iniciando espera de 30 segundos para capturar TODOS los grupos...');
+            
+            const gruposIds = new Set();
+            let timeoutCompletado = false;
+            
+            const manejarGroupsUpdate = (updates) => {
+                if (timeoutCompletado) return;
+                
+                updates.forEach(update => {
+                    if (update.id && update.id.endsWith('@g.us')) {
+                        if (!gruposIds.has(update.id)) {
+                            gruposIds.add(update.id);
+                            guardarLogLocal(`   ➕ Grupo detectado por evento: ${update.id}`);
+                        }
+                    }
+                });
+            };
+            
+            sock.ev.on('groups.update', manejarGroupsUpdate);
+            
+            setTimeout(() => {
+                timeoutCompletado = true;
+                sock.ev.off('groups.update', manejarGroupsUpdate);
+                
+                guardarLogLocal(`✅ Espera completada. Se detectaron ${gruposIds.size} grupos por eventos.`);
+                resolve(Array.from(gruposIds));
+            }, CONFIG.tiempo_espera_grupos);
+            
+        } catch (error) {
+            guardarLogLocal(`❌ Error en espera de grupos: ${error.message}`);
+            resolve([]);
+        }
+    });
+}
+
+// ============================================
+// FUNCIÓN PRINCIPAL: Obtener grupos desde Data Store (CON CACHÉ)
+// ============================================
+async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     try {
-        guardarLogLocal('🔍 Obteniendo TODOS los grupos de WhatsApp (consulta masiva)...');
+        guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
         
-        // Consultar todos los grupos de una sola vez
-        const gruposDict = await sock.groupFetchAllParticipatingGroups();
+        let gruposIdsAdicionales = [];
+        if (usarEspera) {
+            gruposIdsAdicionales = await obtenerGruposConEspera(sock);
+        }
         
-        if (!gruposDict || typeof gruposDict !== 'object') {
-            guardarLogLocal('⚠️ No se obtuvieron grupos o formato inesperado');
+        if (!store || !store.chats) {
+            guardarLogLocal('❌ Data Store no disponible');
             return [];
         }
         
-        // Convertir el diccionario a array
-        const gruposArray = Object.entries(gruposDict).map(([id, info]) => ({
-            id: id,
-            info: info
-        }));
+        const todosLosChats = store.chats.all() || [];
+        guardarLogLocal(`   Total de chats en store: ${todosLosChats.length}`);
         
-        guardarLogLocal(`✅ Consulta masiva completada: ${gruposArray.length} grupos obtenidos`);
-        return gruposArray;
+        const grupos = todosLosChats.filter(chat => chat.id && chat.id.endsWith('@g.us'));
+        
+        guardarLogLocal(`   Chats del store filtrados como grupos: ${grupos.length}`);
+        
+        if (gruposIdsAdicionales.length > 0) {
+            guardarLogLocal(`   Grupos adicionales por eventos: ${gruposIdsAdicionales.length}`);
+        }
+        
+        const listaGrupos = [];
+        const gruposProcesados = new Set();
+        
+        for (const chat of grupos) {
+            let nombreGrupo = 'Sin nombre';
+            let metadata = null;
+            
+            if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
+                nombreGrupo = chat.name;
+            }
+            else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
+                nombreGrupo = chat.subject;
+            }
+            else if (chat.metadata && chat.metadata.subject) {
+                nombreGrupo = chat.metadata.subject;
+            }
+            else if (chat.metadata && chat.metadata.name) {
+                nombreGrupo = chat.metadata.name;
+            }
+            else if (chat.title) {
+                nombreGrupo = chat.title;
+            }
+            
+            if (nombreGrupo === 'Sin nombre') {
+                if (groupCache.has(chat.id)) {
+                    metadata = groupCache.get(chat.id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ: ${nombreGrupo}`);
+                    }
+                }
+            }
+            
+            if (nombreGrupo === 'Sin nombre' && sock) {
+                guardarLogLocal(`   ⚠️ Grupo sin nombre, consultando a WhatsApp con CACHÉ: ${chat.id}`);
+                metadata = await obtenerMetadataGrupoConCache(sock, chat.id);
+                if (metadata && metadata.subject) {
+                    nombreGrupo = metadata.subject;
+                }
+            }
+            
+            listaGrupos.push({
+                id: chat.id,
+                nombre: nombreGrupo
+            });
+            gruposProcesados.add(chat.id);
+        }
+        
+        for (const id of gruposIdsAdicionales) {
+            if (!gruposProcesados.has(id) && sock) {
+                guardarLogLocal(`   🔄 Procesando grupo adicional de evento: ${id}`);
+                
+                let nombreGrupo = 'Sin nombre';
+                
+                if (groupCache.has(id)) {
+                    const metadata = groupCache.get(id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ (evento): ${nombreGrupo}`);
+                    }
+                }
+                
+                if (nombreGrupo === 'Sin nombre') {
+                    const metadata = await obtenerMetadataGrupoConCache(sock, id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                    }
+                }
+                
+                listaGrupos.push({
+                    id: id,
+                    nombre: nombreGrupo
+                });
+            }
+        }
+        
+        guardarLogLocal(`✅ Total de grupos procesados: ${listaGrupos.length}`);
+        return listaGrupos;
         
     } catch (error) {
-        guardarLogLocal(`❌ Error en consulta masiva de grupos: ${error.message}`);
+        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
         return [];
     }
 }
 
 // ============================================
-// FUNCIÓN MODIFICADA: Obtener grupos desde Data Store (con prioridad a consulta masiva)
+// NUEVA FUNCIÓN SEPARADA: Consulta masiva de grupos (sin modificar la existente)
 // ============================================
-async function obtenerGruposDesdeStore(sock, usarEspera = false) {
+async function consultaMasivaGrupos(sock) {
     try {
-        guardarLogLocal('🔍 Obteniendo grupos...');
+        guardarLogLocal('🔍 Ejecutando consulta masiva de grupos (función separada)...');
         
-        // PASO 1: Obtener TODOS los grupos mediante consulta masiva
-        const gruposMasivos = await obtenerTodosLosGruposWhatsApp(sock);
-        
-        if (gruposMasivos.length === 0) {
-            guardarLogLocal('⚠️ No se pudieron obtener grupos mediante consulta masiva');
-            return [];
+        // Verificar si la función existe en esta versión de Baileys
+        if (typeof sock.groupFetchAllParticipatingGroups !== 'function') {
+            guardarLogLocal('⚠️ La función groupFetchAllParticipatingGroups no está disponible en esta versión');
+            guardarLogLocal('   Usando método alternativo (store + eventos)');
+            return await obtenerGruposDesdeStore(sock, true);
         }
         
-        guardarLogLocal(`   Procesando ${gruposMasivos.length} grupos...`);
+        // Intentar consulta masiva
+        const gruposDict = await sock.groupFetchAllParticipatingGroups();
         
+        if (!gruposDict || typeof gruposDict !== 'object') {
+            guardarLogLocal('⚠️ No se obtuvieron grupos en consulta masiva');
+            return await obtenerGruposDesdeStore(sock, true);
+        }
+        
+        // Convertir a array
+        const gruposArray = Object.entries(gruposDict).map(([id, info]) => ({
+            id: id,
+            info: info
+        }));
+        
+        guardarLogLocal(`✅ Consulta masiva exitosa: ${gruposArray.length} grupos`);
+        
+        // Procesar nombres
         const listaGrupos = [];
-        
-        for (const grupo of gruposMasivos) {
+        for (const grupo of gruposArray) {
             let nombreGrupo = 'Sin nombre';
             const info = grupo.info;
             
-            // Intentar obtener nombre de diferentes fuentes
             if (info.name && info.name !== 'Sin nombre' && info.name.trim() !== '') {
                 nombreGrupo = info.name;
             }
@@ -803,23 +939,18 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
                 nombreGrupo = info.title;
             }
             
-            // Guardar en caché para futuras consultas
-            if (!groupCache.has(grupo.id)) {
-                groupCache.set(grupo.id, info);
-            }
-            
             listaGrupos.push({
                 id: grupo.id,
                 nombre: nombreGrupo
             });
         }
         
-        guardarLogLocal(`✅ ${listaGrupos.length} grupos procesados correctamente`);
         return listaGrupos;
         
     } catch (error) {
-        guardarLogLocal(`❌ Error obteniendo grupos: ${error.message}`);
-        return [];
+        guardarLogLocal(`❌ Error en consulta masiva: ${error.message}`);
+        guardarLogLocal('   Usando método alternativo (store + eventos)');
+        return await obtenerGruposDesdeStore(sock, true);
     }
 }
 
@@ -913,7 +1044,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CONSULTA MASIVA DE GRUPOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CONSULTA MASIVA SEPARADA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -926,7 +1057,6 @@ async function iniciarWhatsApp() {
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
-    console.log('📊 NUEVO: Consulta masiva de grupos (evita rate limit)');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1135,7 +1265,6 @@ async function iniciarWhatsApp() {
                                   `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
                                   `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                   `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
-                                  `📊  Consulta masiva: ACTIVADA (evita rate limit)\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
@@ -1149,6 +1278,7 @@ async function iniciarWhatsApp() {
                     
                     await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
                     
+                    // Usar la función original que ya funciona (NO la nueva consulta masiva)
                     const grupos = await obtenerGruposDesdeStore(sock, true);
                     
                     if (grupos.length === 0) {
@@ -1164,7 +1294,7 @@ async function iniciarWhatsApp() {
                     confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
                     confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                     confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                    confirmacion += `📚 Fuente: Consulta masiva de WhatsApp (sin rate limit)`;
+                    confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
                     
                     await sock.sendMessage(remitente, { text: confirmacion });
                 }
