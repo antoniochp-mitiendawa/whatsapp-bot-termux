@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 27.0 - CONSULTA MASIVA (SIN MODIFICAR EXISTENTE)
+// Versión: 30.0 - ESTADOS COMPLETAMENTE AUTOMÁTICOS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -20,7 +20,7 @@
 // - Cache de grupos para mejor rendimiento
 // - Logs solo locales
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
-// - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - SIN MODIFICAR NADA EXISTENTE
+// - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -55,7 +55,16 @@ const CONFIG = {
     horarios_actualizacion: ['06:00', '18:00'],
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-    tiempo_espera_grupos: 30000
+    tiempo_espera_grupos: 30000,
+    // ============================================
+    // NUEVOS PARÁMETROS PARA HISTORIAS
+    // ============================================
+    carpeta_historias: '/storage/emulated/0/Historias',
+    archivo_progreso_historias: './progreso_historias.json',
+    horario_historias: '00:00-23:59', // Todo el día por defecto
+    dias_historias: 'L,M,MI,J,V,S,D', // Todos los días
+    intervalo_historias_min: 2, // Mínimo 2 minutos
+    intervalo_historias_max: 10 // Máximo 10 minutos
 };
 
 // Crear carpetas necesarias
@@ -75,6 +84,19 @@ if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
     } catch (error) {
         console.error('❌ Error creando carpeta multimedia:', error.message);
     }
+}
+// ============================================
+// CREAR CARPETA DE HISTORIAS SI NO EXISTE
+// ============================================
+if (!fs.existsSync(CONFIG.carpeta_historias)) {
+    try {
+        fs.mkdirSync(CONFIG.carpeta_historias, { recursive: true });
+        console.log('📁 Carpeta de Historias creada:', CONFIG.carpeta_historias);
+    } catch (error) {
+        console.error('❌ Error creando carpeta de Historias:', error.message);
+    }
+} else {
+    console.log('📁 Carpeta de Historias ya existe:', CONFIG.carpeta_historias);
 }
 
 // ============================================
@@ -355,6 +377,31 @@ async function consultarTodosLosGrupos(url) {
                 CONFIG.tiempo_entre_mensajes_min = 1;
                 CONFIG.tiempo_entre_mensajes_max = valor;
                 console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (convertido desde valor único)`);
+            }
+            
+            // ============================================
+            // LEER PARÁMETROS PARA HISTORIAS (si están en Sheets)
+            // ============================================
+            const horarioHistorias = data.config.HORARIO_HISTORIAS;
+            if (horarioHistorias) {
+                CONFIG.horario_historias = horarioHistorias;
+                console.log(`📅 Horario historias configurado: ${CONFIG.horario_historias}`);
+            }
+            
+            const diasHistorias = data.config.DIAS_HISTORIAS;
+            if (diasHistorias) {
+                CONFIG.dias_historias = diasHistorias;
+                console.log(`📆 Días historias configurados: ${CONFIG.dias_historias}`);
+            }
+            
+            const intervaloStr = data.config.INTERVALO_HISTORIAS;
+            if (intervaloStr && typeof intervaloStr === 'string' && intervaloStr.includes('-')) {
+                const partes = intervaloStr.split('-').map(p => parseInt(p.trim()));
+                if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
+                    CONFIG.intervalo_historias_min = partes[0];
+                    CONFIG.intervalo_historias_max = partes[1];
+                    console.log(`⏱️  Intervalo historias configurado: ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} minutos`);
+                }
             }
         }
         
@@ -1041,320 +1088,8 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP
+// NUEVAS FUNCIONES PARA ESTADOS (HISTORIAS)
 // ============================================
-async function iniciarWhatsApp() {
-    console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CONSULTA MASIVA SEPARADA)');
-    console.log('====================================\n');
-    console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
-    console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
-    console.log('📚 Data Store activado - Extrayendo grupos localmente');
-    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
-    console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
-    console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
-    console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
-    console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
-    console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
-    console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
-    console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
-    console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
-    console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
-
-    const url_sheets = leerURL();
-    if (!url_sheets) {
-        console.log('❌ No hay URL');
-        return;
-    }
-
-    try {
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
-        
-        const logger = pino({ level: 'silent' });
-        const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
-
-        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
-        
-        let browserConfig;
-        if (!existeSesion) {
-            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
-            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
-        } else {
-            browserConfig = Browsers.macOS("Desktop");
-            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
-        }
-
-        const sock = makeWASocket({
-            version,
-            auth: state,
-            logger: logger,
-            printQRInTerminal: false,
-            browser: browserConfig,
-            syncFullHistory: false,
-            markOnlineOnConnect: true,
-            defaultQueryTimeoutMs: 60000,
-            shouldSyncHistoryMessage: () => false,
-            generateHighQualityLinkPreview: true,
-            cachedGroupMetadata: async (jid) => groupCache.get(jid)
-        });
-
-        store.bind(sock.ev);
-
-        sock.ev.on('groups.update', async (updates) => {
-            for (const update of updates) {
-                try {
-                    const metadata = await sock.groupMetadata(update.id);
-                    groupCache.set(update.id, metadata);
-                } catch (e) {}
-            }
-        });
-
-        sock.ev.on('group-participants.update', async (update) => {
-            try {
-                const metadata = await sock.groupMetadata(update.id);
-                groupCache.set(update.id, metadata);
-            } catch (e) {}
-        });
-
-        if (!sock.authState.creds.registered) {
-            console.log('📱 PRIMERA CONFIGURACIÓN\n');
-            const numero = await pedirNumeroSilencioso();
-            console.log(`\n🔄 Solicitando código...`);
-            
-            setTimeout(async () => {
-                try {
-                    const codigo = await sock.requestPairingCode(numero);
-                    console.log('\n====================================');
-                    console.log('🔐 CÓDIGO:', codigo);
-                    console.log('====================================');
-                    console.log('1. Abre WhatsApp');
-                    console.log('2. 3 puntos → Dispositivos vinculados');
-                    console.log('3. Vincular con número');
-                    console.log('4. Ingresa el código\n');
-                } catch (error) {
-                    console.log('❌ Error al generar código');
-                }
-            }, 2000);
-        }
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-
-            if (connection === 'open') {
-                console.log('\n✅ CONECTADO A WHATSAPP\n');
-                guardarLogLocal('CONEXIÓN EXITOSA');
-                
-                limpiarStoreAntiguo();
-                
-                const agenda = cargarAgendaLocal();
-                if (agenda.grupos.length === 0) {
-                    guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
-                    await actualizarAgenda(sock, url_sheets, 'primera vez');
-                }
-                
-                guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
-                await sincronizarGruposConSheets(sock, url_sheets);
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error instanceof Boom ? lastDisconnect.error.output.statusCode : 500;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
-                if (shouldReconnect) {
-                    guardarLogLocal('🔄 Reconectando...');
-                    setTimeout(() => iniciarWhatsApp(), 5000);
-                } else {
-                    guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
-                }
-            }
-        });
-
-        sock.ev.on('creds.update', saveCreds);
-
-        cron.schedule('0 3 * * *', async () => {
-            guardarLogLocal('⏰ Ejecutando limpieza programada del Data Store (3 AM)');
-            limpiarStoreAntiguo();
-        });
-
-        CONFIG.horarios_actualizacion.forEach(hora => {
-            const [horas, minutos] = hora.split(':');
-            const expresionCron = `${minutos} ${horas} * * *`;
-            
-            cron.schedule(expresionCron, async () => {
-                guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
-                await sincronizarGruposConSheets(sock, url_sheets);
-            });
-        });
-
-        CONFIG.horarios_actualizacion.forEach(hora => {
-            const [horas, minutos] = hora.split(':');
-            const expresionCron = `${minutos} ${horas} * * *`;
-            
-            cron.schedule(expresionCron, async () => {
-                guardarLogLocal(`⏰ Actualización programada de agenda (${hora})`);
-                await actualizarAgenda(sock, url_sheets, 'programado');
-            });
-        });
-
-        cron.schedule('* * * * *', async () => {
-            await verificarMensajesLocales(sock);
-        });
-
-        // ============================================
-        // EVENTO DE MENSAJES - SIN FILTRO DE TIPO
-        // ============================================
-        sock.ev.on('messages.upsert', async (m) => {
-            // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
-            
-            const mensaje = m.messages[0];
-            
-            // Verificar que sea un mensaje válido y no sea del propio bot
-            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {
-                return;
-            }
-
-            const remitente = mensaje.key.remoteJid;
-            const texto = mensaje.message.conversation || 
-                         mensaje.message.extendedTextMessage?.text || '';
-            
-            // Ignorar mensajes vacíos
-            if (!texto || texto.trim() === '') {
-                return;
-            }
-
-            // ============================================
-            // FILTRO DE TIMESTAMP ELIMINADO
-            // ============================================
-            
-            // Solo responder a mensajes PRIVADOS
-            if (remitente && !remitente.includes('@g.us') && texto) {
-                const cmd = texto.toLowerCase().trim();
-                guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
-                
-                if (cmd === 'actualizar' || cmd === 'update') {
-                    guardarLogLocal(`   Procesando comando: actualizar`);
-                    const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
-                    if (resultado) {
-                        await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
-                    } else {
-                        await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
-                    }
-                }
-                
-                else if (cmd === 'status' || cmd === 'estado') {
-                    guardarLogLocal(`   Procesando comando: status`);
-                    const agenda = cargarAgendaLocal();
-                    const total = agenda.grupos?.length || 0;
-                    const pestanas = Object.keys(agenda.pestanas || {}).length;
-                    const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                    
-                    let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
-                                  `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                                  `📋 Grupos totales: ${total}\n` +
-                                  `✅ Grupos activos: ${activos}\n` +
-                                  `📌 Pestañas: ${pestanas}\n` +
-                                  `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
-                                  `✍️  Typing adaptativo: activado\n` +
-                                  `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                  `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                  `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                  `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                  `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                  `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
-                                  `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                  `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
-                                  `🗑️  Limpieza automática: activada\n` +
-                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                  `📤 Comando listagrupos: disponible (con caché)\n` +
-                                  `⏰ Próxima actualización: 6am/6pm`;
-                    
-                    await sock.sendMessage(remitente, { text: mensaje });
-                }
-                
-                else if (cmd === 'listagrupos' || cmd === 'grupos') {
-                    guardarLogLocal(`   Procesando comando: listagrupos`);
-                    
-                    await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
-                    
-                    // Usar la función original que ya funciona (NO la nueva consulta masiva)
-                    const grupos = await obtenerGruposDesdeStore(sock, true);
-                    
-                    if (grupos.length === 0) {
-                        await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
-                        return;
-                    }
-                    
-                    const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
-                    
-                    const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
-                    
-                    let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
-                    confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
-                    confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
-                    confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                    confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
-                    
-                    await sock.sendMessage(remitente, { text: confirmacion });
-                }
-            }
-        });
-
-        console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - Forzar descarga de agenda');
-        console.log('   - "status" - Ver estado del bot');
-        console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
-        console.log('   - Presiona CTRL+C para salir\n');
-
-    } catch (error) {
-        guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
-        setTimeout(() => iniciarWhatsApp(), 30000);
-    }
-}
-
-process.on('SIGINT', () => {
-    console.log('\n\n👋 Cerrando bot...');
-    guardarLogLocal('BOT CERRADO MANUALMENTE');
-    limpiarCacheImagenes();
-    store.writeToFile(CONFIG.archivo_store);
-    process.exit(0);
-});
-
-console.log('====================================');
-console.log('🚀 SISTEMA DE MENSAJES MULTI-PESTAÑA');
-console.log('====================================\n');
-
-iniciarWhatsApp().catch(error => {
-    console.log('❌ Error fatal:', error);
-});
-
-// ============================================
-// ============================================
-// FUNCIONES NUEVAS PARA ESTADOS (HISTORIAS)
-// ============================================
-// ============================================
-
-// --- AÑADIR NUEVOS PARÁMETROS A CONFIG (sin modificar los existentes) ---
-CONFIG.carpeta_historias = '/storage/emulated/0/Historias';
-CONFIG.archivo_progreso_historias = './progreso_historias.json';
-CONFIG.horario_historias = '00:00-23:59'; // Todo el día por defecto
-CONFIG.dias_historias = 'L,M,MI,J,V,S,D'; // Todos los días
-CONFIG.intervalo_historias_min = 2; // Mínimo 2 minutos
-CONFIG.intervalo_historias_max = 10; // Máximo 10 minutos
-
-// --- Crear carpeta de Historias si no existe (sin modificar nada) ---
-if (!fs.existsSync(CONFIG.carpeta_historias)) {
-    try {
-        fs.mkdirSync(CONFIG.carpeta_historias, { recursive: true });
-        console.log('📁 Carpeta de Historias creada:', CONFIG.carpeta_historias);
-    } catch (error) {
-        console.error('❌ Error creando carpeta de Historias:', error.message);
-    }
-} else {
-    console.log('📁 Carpeta de Historias ya existe:', CONFIG.carpeta_historias);
-}
 
 // --- Función para obtener emoji según tipo de archivo y nombre ---
 function obtenerEmojiParaHistoria(nombreArchivo, extension) {
@@ -1664,16 +1399,320 @@ async function procesarHistorias(sock) {
     }
 }
 
-// --- Inicializar sistema de historias al conectar (añadir al evento connection.update) ---
-// NOTA: Esto se añade DENTRO de la función iniciarWhatsApp, después de la sincronización inicial
-// Pero como no podemos modificar el código existente, el usuario deberá añadir manualmente:
-// guardarLogLocal('📢 Inicializando sistema de Historias...');
-// actualizarColaHistorias();
-// y
-// cron.schedule('* * * * *', async () => {
-//     await procesarHistorias(sock);
-// });
+// ============================================
+// INICIAR CONEXIÓN WHATSAPP (CON ESTADOS AUTOMÁTICOS)
+// ============================================
+async function iniciarWhatsApp() {
+    console.log('====================================');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 30.0 (ESTADOS AUTOMÁTICOS)');
+    console.log('====================================\n');
+    console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
+    console.log('✍️  Typing adaptativo activado');
+    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
+    console.log('📚 Data Store activado - Extrayendo grupos localmente');
+    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
+    console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
+    console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
+    console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
+    console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
+    console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
+    console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
+    console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
+    console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
+    console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
+    console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
+    console.log('📝 Logs locales (carpeta logs/)\n');
+    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
 
-// ============================================
-// FIN DE FUNCIONES NUEVAS PARA ESTADOS
-// ============================================
+    const url_sheets = leerURL();
+    if (!url_sheets) {
+        console.log('❌ No hay URL');
+        return;
+    }
+
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
+        
+        const logger = pino({ level: 'silent' });
+        const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
+
+        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
+        
+        let browserConfig;
+        if (!existeSesion) {
+            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
+            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
+        } else {
+            browserConfig = Browsers.macOS("Desktop");
+            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
+        }
+
+        const sock = makeWASocket({
+            version,
+            auth: state,
+            logger: logger,
+            printQRInTerminal: false,
+            browser: browserConfig,
+            syncFullHistory: false,
+            markOnlineOnConnect: true,
+            defaultQueryTimeoutMs: 60000,
+            shouldSyncHistoryMessage: () => false,
+            generateHighQualityLinkPreview: true,
+            cachedGroupMetadata: async (jid) => groupCache.get(jid)
+        });
+
+        store.bind(sock.ev);
+
+        sock.ev.on('groups.update', async (updates) => {
+            for (const update of updates) {
+                try {
+                    const metadata = await sock.groupMetadata(update.id);
+                    groupCache.set(update.id, metadata);
+                } catch (e) {}
+            }
+        });
+
+        sock.ev.on('group-participants.update', async (update) => {
+            try {
+                const metadata = await sock.groupMetadata(update.id);
+                groupCache.set(update.id, metadata);
+            } catch (e) {}
+        });
+
+        if (!sock.authState.creds.registered) {
+            console.log('📱 PRIMERA CONFIGURACIÓN\n');
+            const numero = await pedirNumeroSilencioso();
+            console.log(`\n🔄 Solicitando código...`);
+            
+            setTimeout(async () => {
+                try {
+                    const codigo = await sock.requestPairingCode(numero);
+                    console.log('\n====================================');
+                    console.log('🔐 CÓDIGO:', codigo);
+                    console.log('====================================');
+                    console.log('1. Abre WhatsApp');
+                    console.log('2. 3 puntos → Dispositivos vinculados');
+                    console.log('3. Vincular con número');
+                    console.log('4. Ingresa el código\n');
+                } catch (error) {
+                    console.log('❌ Error al generar código');
+                }
+            }, 2000);
+        }
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+
+            if (connection === 'open') {
+                console.log('\n✅ CONECTADO A WHATSAPP\n');
+                guardarLogLocal('CONEXIÓN EXITOSA');
+                
+                limpiarStoreAntiguo();
+                
+                const agenda = cargarAgendaLocal();
+                if (agenda.grupos.length === 0) {
+                    guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
+                    await actualizarAgenda(sock, url_sheets, 'primera vez');
+                }
+                
+                guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
+                await sincronizarGruposConSheets(sock, url_sheets);
+                
+                // ============================================
+                // NUEVO: Inicializar sistema de Historias
+                // ============================================
+                guardarLogLocal('📢 Inicializando sistema de Historias...');
+                actualizarColaHistorias();
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error instanceof Boom ? lastDisconnect.error.output.statusCode : 500;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                if (shouldReconnect) {
+                    guardarLogLocal('🔄 Reconectando...');
+                    setTimeout(() => iniciarWhatsApp(), 5000);
+                } else {
+                    guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
+                }
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        cron.schedule('0 3 * * *', async () => {
+            guardarLogLocal('⏰ Ejecutando limpieza programada del Data Store (3 AM)');
+            limpiarStoreAntiguo();
+        });
+
+        CONFIG.horarios_actualizacion.forEach(hora => {
+            const [horas, minutos] = hora.split(':');
+            const expresionCron = `${minutos} ${horas} * * *`;
+            
+            cron.schedule(expresionCron, async () => {
+                guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
+                await sincronizarGruposConSheets(sock, url_sheets);
+            });
+        });
+
+        CONFIG.horarios_actualizacion.forEach(hora => {
+            const [horas, minutos] = hora.split(':');
+            const expresionCron = `${minutos} ${horas} * * *`;
+            
+            cron.schedule(expresionCron, async () => {
+                guardarLogLocal(`⏰ Actualización programada de agenda (${hora})`);
+                await actualizarAgenda(sock, url_sheets, 'programado');
+            });
+        });
+
+        cron.schedule('* * * * *', async () => {
+            await verificarMensajesLocales(sock);
+        });
+
+        // ============================================
+        // NUEVO: Cron para historias (cada minuto)
+        // ============================================
+        cron.schedule('* * * * *', async () => {
+            await procesarHistorias(sock);
+        });
+
+        // ============================================
+        // EVENTO DE MENSAJES - SIN FILTRO DE TIPO
+        // ============================================
+        sock.ev.on('messages.upsert', async (m) => {
+            // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
+            
+            const mensaje = m.messages[0];
+            
+            // Verificar que sea un mensaje válido y no sea del propio bot
+            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {
+                return;
+            }
+
+            const remitente = mensaje.key.remoteJid;
+            const texto = mensaje.message.conversation || 
+                         mensaje.message.extendedTextMessage?.text || '';
+            
+            // Ignorar mensajes vacíos
+            if (!texto || texto.trim() === '') {
+                return;
+            }
+
+            // ============================================
+            // FILTRO DE TIMESTAMP ELIMINADO
+            // ============================================
+            
+            // Solo responder a mensajes PRIVADOS
+            if (remitente && !remitente.includes('@g.us') && texto) {
+                const cmd = texto.toLowerCase().trim();
+                guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
+                
+                if (cmd === 'actualizar' || cmd === 'update') {
+                    guardarLogLocal(`   Procesando comando: actualizar`);
+                    const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
+                    if (resultado) {
+                        await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
+                    } else {
+                        await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
+                    }
+                }
+                
+                else if (cmd === 'status' || cmd === 'estado') {
+                    guardarLogLocal(`   Procesando comando: status`);
+                    const agenda = cargarAgendaLocal();
+                    const total = agenda.grupos?.length || 0;
+                    const pestanas = Object.keys(agenda.pestanas || {}).length;
+                    const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                    
+                    // ============================================
+                    // NUEVO: Información de historias en status
+                    // ============================================
+                    const progreso = cargarProgresoHistorias();
+                    const archivosEnCarpeta = escanearCarpetaHistorias().length;
+                    
+                    let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                  `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                  `📋 Grupos totales: ${total}\n` +
+                                  `✅ Grupos activos: ${activos}\n` +
+                                  `📌 Pestañas: ${pestanas}\n` +
+                                  `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                  `✍️  Typing adaptativo: activado\n` +
+                                  `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                  `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                  `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                  `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                  `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                  `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                  `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                  `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                  // ============================================
+                                  // NUEVO: Información de historias en status
+                                  // ============================================
+                                  `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
+                                  `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
+                                  `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
+                                  `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
+                                  `🗑️  Limpieza automática: activada\n` +
+                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                  `📤 Comando listagrupos: disponible (con caché)\n` +
+                                  `⏰ Próxima actualización: 6am/6pm`;
+                    
+                    await sock.sendMessage(remitente, { text: mensaje });
+                }
+                
+                else if (cmd === 'listagrupos' || cmd === 'grupos') {
+                    guardarLogLocal(`   Procesando comando: listagrupos`);
+                    
+                    await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
+                    
+                    // Usar la función original que ya funciona
+                    const grupos = await obtenerGruposDesdeStore(sock, true);
+                    
+                    if (grupos.length === 0) {
+                        await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
+                        return;
+                    }
+                    
+                    const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
+                    
+                    const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
+                    
+                    let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
+                    confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
+                    confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
+                    confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
+                    confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
+                    
+                    await sock.sendMessage(remitente, { text: confirmacion });
+                }
+            }
+        });
+
+        console.log('\n📝 Comandos disponibles en WhatsApp:');
+        console.log('   - "actualizar" - Forzar descarga de agenda');
+        console.log('   - "status" - Ver estado del bot (incluye info de Historias)');
+        console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
+        console.log('   - Presiona CTRL+C para salir\n');
+
+    } catch (error) {
+        guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
+        setTimeout(() => iniciarWhatsApp(), 30000);
+    }
+}
+
+process.on('SIGINT', () => {
+    console.log('\n\n👋 Cerrando bot...');
+    guardarLogLocal('BOT CERRADO MANUALMENTE');
+    limpiarCacheImagenes();
+    store.writeToFile(CONFIG.archivo_store);
+    process.exit(0);
+});
+
+console.log('====================================');
+console.log('🚀 SISTEMA DE MENSAJES MULTI-PESTAÑA');
+console.log('====================================\n');
+
+iniciarWhatsApp().catch(error => {
+    console.log('❌ Error fatal:', error);
+});
