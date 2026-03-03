@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 26.0 - GRUPOS CON CACHÉ (sin rate-overlimit)
+// Versión: 27.0 - CORRECCIÓN DE LATENCIA EN MENSAJES
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -8,7 +8,7 @@
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
-// - NUEVO: Consulta a WhatsApp con CACHÉ para evitar rate-overlimit
+// - NUEVO: Corrección de latencia - procesa mensajes inmediatamente
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
 // - Limpieza automática del Data Store (mensajes > 30 días)
 // - Soporte multimedia: imágenes, audios, videos, documentos
@@ -95,7 +95,7 @@ setInterval(() => {
 }, 10_000);
 
 // ============================================
-// CACHE DE GRUPOS (NUEVO: se usará para guardar metadatos)
+// CACHE DE GRUPOS
 // ============================================
 const groupCache = new Map();
 
@@ -103,22 +103,19 @@ const groupCache = new Map();
 let imagenesUsadasEnLote = new Set();
 
 // ============================================
-// NUEVA FUNCIÓN: Obtener metadatos de grupo con CACHÉ
+// FUNCIÓN PARA OBTENER METADATOS DE GRUPO CON CACHÉ
 // ============================================
 async function obtenerMetadataGrupoConCache(sock, groupId) {
     try {
-        // PASO 1: Verificar si ya está en el caché
         if (groupCache.has(groupId)) {
             const cached = groupCache.get(groupId);
             guardarLogLocal(`   📦 Usando nombre desde caché: ${cached.subject || 'Sin nombre'}`);
             return cached;
         }
         
-        // PASO 2: Si no está en caché, consultar a WhatsApp
         guardarLogLocal(`   🌐 Consultando a WhatsApp (puede tomar unos segundos): ${groupId}`);
         const metadata = await sock.groupMetadata(groupId);
         
-        // PASO 3: Guardar en caché para futuras consultas
         if (metadata) {
             groupCache.set(groupId, metadata);
             guardarLogLocal(`   ✅ Guardado en caché: ${metadata.subject || 'Sin nombre'}`);
@@ -128,7 +125,6 @@ async function obtenerMetadataGrupoConCache(sock, groupId) {
     } catch (error) {
         guardarLogLocal(`   ❌ Error consultando grupo: ${error.message}`);
         
-        // Si hay error, devolver null (se intentará en la próxima sincronización)
         if (error.message.includes('rate-overlimit')) {
             guardarLogLocal(`   ⚠️ Rate limit detectado. Se reintentará automáticamente en la próxima sincronización.`);
         }
@@ -778,7 +774,7 @@ async function obtenerGruposConEspera(sock) {
 }
 
 // ============================================
-// FUNCIÓN PRINCIPAL: Obtener grupos desde Data Store (CON CACHÉ MEJORADO)
+// FUNCIÓN PRINCIPAL: Obtener grupos desde Data Store (CON CACHÉ)
 // ============================================
 async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     try {
@@ -808,14 +804,10 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
         const listaGrupos = [];
         const gruposProcesados = new Set();
         
-        // ============================================
-        // PROCESAR GRUPOS DEL STORE (CON CACHÉ MEJORADO)
-        // ============================================
         for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
             let metadata = null;
             
-            // PASO 1: Buscar en el store (lo que ya funcionaba)
             if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
                 nombreGrupo = chat.name;
             }
@@ -832,9 +824,7 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
                 nombreGrupo = chat.title;
             }
             
-            // PASO 2: Si sigue sin nombre, usar el CACHÉ (nuevo)
             if (nombreGrupo === 'Sin nombre') {
-                // Verificar si ya está en el caché
                 if (groupCache.has(chat.id)) {
                     metadata = groupCache.get(chat.id);
                     if (metadata && metadata.subject) {
@@ -844,7 +834,6 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
                 }
             }
             
-            // PASO 3: Si aún sin nombre, consultar a WhatsApp (y guardar en caché)
             if (nombreGrupo === 'Sin nombre' && sock) {
                 guardarLogLocal(`   ⚠️ Grupo sin nombre, consultando a WhatsApp con CACHÉ: ${chat.id}`);
                 metadata = await obtenerMetadataGrupoConCache(sock, chat.id);
@@ -860,16 +849,12 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
             gruposProcesados.add(chat.id);
         }
         
-        // ============================================
-        // PROCESAR GRUPOS ADICIONALES DE EVENTOS
-        // ============================================
         for (const id of gruposIdsAdicionales) {
             if (!gruposProcesados.has(id) && sock) {
                 guardarLogLocal(`   🔄 Procesando grupo adicional de evento: ${id}`);
                 
                 let nombreGrupo = 'Sin nombre';
                 
-                // Verificar caché primero
                 if (groupCache.has(id)) {
                     const metadata = groupCache.get(id);
                     if (metadata && metadata.subject) {
@@ -878,7 +863,6 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
                     }
                 }
                 
-                // Si no está en caché, consultar a WhatsApp
                 if (nombreGrupo === 'Sin nombre') {
                     const metadata = await obtenerMetadataGrupoConCache(sock, id);
                     if (metadata && metadata.subject) {
@@ -988,11 +972,11 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP
+// INICIAR CONEXIÓN WHATSAPP (con corrección de latencia)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 26.0 (GRUPOS CON CACHÉ)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 27.0 (CORRECCIÓN DE LATENCIA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1004,6 +988,7 @@ async function iniciarWhatsApp() {
     console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
+    console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1149,78 +1134,109 @@ async function iniciarWhatsApp() {
             await verificarMensajesLocales(sock);
         });
 
+        // ============================================
+        // CORRECCIÓN DE LATENCIA: Evento de mensajes mejorado
+        // ============================================
         sock.ev.on('messages.upsert', async (m) => {
+            // Solo procesar mensajes nuevos (type === 'notify')
+            if (m.type !== 'notify') {
+                guardarLogLocal(`   ⏭️ Ignorando mensaje tipo "${m.type}" (no es notificación nueva)`);
+                return;
+            }
+            
             const mensaje = m.messages[0];
-            if (mensaje.key && !mensaje.key.fromMe && mensaje.message) {
-                const remitente = mensaje.key.remoteJid;
-                const texto = mensaje.message.conversation || 
-                             mensaje.message.extendedTextMessage?.text || '';
+            
+            // Verificar que sea un mensaje válido y no sea del propio bot
+            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {
+                return;
+            }
+
+            const remitente = mensaje.key.remoteJid;
+            const texto = mensaje.message.conversation || 
+                         mensaje.message.extendedTextMessage?.text || '';
+            
+            // Ignorar mensajes vacíos
+            if (!texto || texto.trim() === '') {
+                return;
+            }
+
+            // ============================================
+            // NUEVA VERIFICACIÓN: Ignorar mensajes antiguos (buffer)
+            // ============================================
+            const ahora = Date.now() / 1000; // Convertir a segundos
+            if (mensaje.messageTimestamp && (ahora - mensaje.messageTimestamp) > 5) {
+                guardarLogLocal(`   ⏭️ Ignorando mensaje antiguo (buffer) de ${remitente?.split('@')[0]}: "${texto.substring(0, 30)}..."`);
+                return;
+            }
+            
+            // Solo responder a mensajes PRIVADOS
+            if (remitente && !remitente.includes('@g.us') && texto) {
+                const cmd = texto.toLowerCase().trim();
+                guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
                 
-                if (remitente && !remitente.includes('@g.us') && texto) {
-                    const cmd = texto.toLowerCase().trim();
+                if (cmd === 'actualizar' || cmd === 'update') {
+                    guardarLogLocal(`   Procesando comando: actualizar`);
+                    const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
+                    if (resultado) {
+                        await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
+                    } else {
+                        await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
+                    }
+                }
+                
+                else if (cmd === 'status' || cmd === 'estado') {
+                    guardarLogLocal(`   Procesando comando: status`);
+                    const agenda = cargarAgendaLocal();
+                    const total = agenda.grupos?.length || 0;
+                    const pestanas = Object.keys(agenda.pestanas || {}).length;
+                    const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
                     
-                    if (cmd === 'actualizar' || cmd === 'update') {
-                        guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: actualizar`);
-                        const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
-                        if (resultado) {
-                            await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
-                        } else {
-                            await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
-                        }
+                    let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                  `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                  `📋 Grupos totales: ${total}\n` +
+                                  `✅ Grupos activos: ${activos}\n` +
+                                  `📌 Pestañas: ${pestanas}\n` +
+                                  `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                  `✍️  Typing adaptativo: activado\n` +
+                                  `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                  `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                  `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                  `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                  `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                  `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                  `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                  `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                  `🗑️  Limpieza automática: activada\n` +
+                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                  `📤 Comando listagrupos: disponible (con caché)\n` +
+                                  `⏰ Próxima actualización: 6am/6pm`;
+                    
+                    await sock.sendMessage(remitente, { text: mensaje });
+                }
+                
+                else if (cmd === 'listagrupos' || cmd === 'grupos') {
+                    guardarLogLocal(`   Procesando comando: listagrupos`);
+                    
+                    await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
+                    
+                    const grupos = await obtenerGruposDesdeStore(sock, true);
+                    
+                    if (grupos.length === 0) {
+                        await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
+                        return;
                     }
                     
-                    if (cmd === 'status' || cmd === 'estado') {
-                        const agenda = cargarAgendaLocal();
-                        const total = agenda.grupos?.length || 0;
-                        const pestanas = Object.keys(agenda.pestanas || {}).length;
-                        const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                        
-                        let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
-                                      `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                                      `📋 Grupos totales: ${total}\n` +
-                                      `✅ Grupos activos: ${activos}\n` +
-                                      `📌 Pestañas: ${pestanas}\n` +
-                                      `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
-                                      `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                      `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                      `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                      `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                      `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                      `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
-                                      `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                      `🗑️  Limpieza automática: activada\n` +
-                                      `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                      `📤 Comando listagrupos: disponible (con caché)\n` +
-                                      `⏰ Próxima actualización: 6am/6pm`;
-                        
-                        await sock.sendMessage(remitente, { text: mensaje });
-                    }
+                    const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
                     
-                    if (cmd === 'listagrupos' || cmd === 'grupos') {
-                        guardarLogLocal(`📩 Comando remoto de ${remitente.split('@')[0]}: listagrupos`);
-                        
-                        await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
-                        
-                        const grupos = await obtenerGruposDesdeStore(sock, true);
-                        
-                        if (grupos.length === 0) {
-                            await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
-                            return;
-                        }
-                        
-                        const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
-                        
-                        const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
-                        
-                        let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
-                        confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
-                        confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
-                        confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                        confirmacion += `📚 Fuente: Data Store local + CACHÉ + eventos (30s espera)`;
-                        
-                        await sock.sendMessage(remitente, { text: confirmacion });
-                    }
+                    const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
+                    
+                    let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
+                    confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
+                    confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
+                    confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
+                    confirmacion += `📚 Fuente: Data Store local + CACHÉ + eventos (30s espera)`;
+                    
+                    await sock.sendMessage(remitente, { text: confirmacion });
                 }
             }
         });
