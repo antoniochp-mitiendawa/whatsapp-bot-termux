@@ -1,13 +1,14 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 17.0 - Extracción de grupos desde Data Store
+// Versión: 18.0 - Envío automático a Google Sheets
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
-// - NUEVO: Extracción de grupos usando el Data Store (ya no requiere groupFetchAllParticipatingGroups)
+// - Extracción de grupos desde Data Store
+// - NUEVO: Envío automático a Google Sheets al iniciar y cada 12 horas
 // - Soporte para YouTube, TikTok, Instagram, wa.me y más
 // - Múltiples pestañas GRUPOS*
 // - Cada pestaña tiene su propio horario rector
@@ -519,28 +520,24 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: OBTENER GRUPOS DESDE EL DATA STORE
+// FUNCIÓN PARA OBTENER GRUPOS DESDE EL DATA STORE
 // ============================================
 async function obtenerGruposDesdeStore() {
     try {
         guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
         
-        // Verificar que el store tiene datos
         if (!store || !store.chats) {
             guardarLogLocal('❌ Data Store no disponible');
             return [];
         }
         
-        // Obtener todos los chats del store
         const todosLosChats = store.chats.all() || [];
         guardarLogLocal(`   Total de chats en store: ${todosLosChats.length}`);
         
-        // Filtrar solo los grupos (los IDs de grupo terminan en @g.us)
         const grupos = todosLosChats.filter(chat => chat.id && chat.id.endsWith('@g.us'));
         
         guardarLogLocal(`   Chats filtrados como grupos: ${grupos.length}`);
         
-        // Convertir a formato {id, nombre}
         const listaGrupos = grupos.map(chat => ({
             id: chat.id,
             nombre: chat.name || chat.subject || 'Sin nombre'
@@ -552,6 +549,38 @@ async function obtenerGruposDesdeStore() {
     } catch (error) {
         guardarLogLocal(`❌ Error obteniendo grupos desde store: ${error.message}`);
         return [];
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: SINCRONIZAR GRUPOS CON GOOGLE SHEETS
+// ============================================
+async function sincronizarGruposConSheets(url_sheets) {
+    try {
+        guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
+        
+        const grupos = await obtenerGruposDesdeStore();
+        
+        if (grupos.length === 0) {
+            guardarLogLocal('⚠️ No hay grupos para sincronizar');
+            return false;
+        }
+        
+        const respuesta = await axios.post(url_sheets, {
+            grupos: grupos
+        });
+        
+        if (respuesta.data && respuesta.data.success) {
+            guardarLogLocal(`✅ Sincronización automática completada: ${grupos.length} grupos`);
+            return true;
+        } else {
+            guardarLogLocal(`⚠️ Error en sincronización: ${JSON.stringify(respuesta.data)}`);
+            return false;
+        }
+        
+    } catch (error) {
+        guardarLogLocal(`❌ Error en sincronización automática: ${error.message}`);
+        return false;
     }
 }
 
@@ -613,12 +642,13 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 17.0 (EXTRACCIÓN DESDE STORE)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 18.0 (SINCRONIZACIÓN AUTOMÁTICA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
+    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -719,6 +749,12 @@ async function iniciarWhatsApp() {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
                 }
+                
+                // ============================================
+                // NUEVO: Sincronización automática al conectar
+                // ============================================
+                guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
+                await sincronizarGruposConSheets(url_sheets);
             }
 
             if (connection === 'close') {
@@ -735,6 +771,19 @@ async function iniciarWhatsApp() {
         });
 
         sock.ev.on('creds.update', saveCreds);
+
+        // ============================================
+        // PROGRAMAR SINCRONIZACIÓN CADA 12 HORAS
+        // ============================================
+        CONFIG.horarios_actualizacion.forEach(hora => {
+            const [horas, minutos] = hora.split(':');
+            const expresionCron = `${minutos} ${horas} * * *`;
+            
+            cron.schedule(expresionCron, async () => {
+                guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
+                await sincronizarGruposConSheets(url_sheets);
+            });
+        });
 
         CONFIG.horarios_actualizacion.forEach(hora => {
             const [horas, minutos] = hora.split(':');
@@ -785,6 +834,7 @@ async function iniciarWhatsApp() {
                                       `✍️  Typing adaptativo: activado\n` +
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                      `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (desde store)\n` +
@@ -798,9 +848,6 @@ async function iniciarWhatsApp() {
                         
                         await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos desde Data Store...' });
                         
-                        // ============================================
-                        // NUEVO: Usar la función del store en lugar de la antigua
-                        // ============================================
                         const grupos = await obtenerGruposDesdeStore();
                         
                         if (grupos.length === 0) {
