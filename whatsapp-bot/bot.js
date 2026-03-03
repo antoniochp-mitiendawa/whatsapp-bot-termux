@@ -1,15 +1,14 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 25.1 - GRUPOS COMPLETOS (sin eliminar funcionalidad existente)
+// Versión: 26.0 - GRUPOS CON CACHÉ (sin rate-overlimit)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
 // - Typing adaptativo (80% del delay)
 // - Link Previews: título/descripción con Baileys, imagen con caché local
 // - Data Store integrado para almacenar información de grupos localmente
-// - NUEVO: Obtención COMPLETA de grupos combinando store + eventos
 // - Extracción de grupos desde Data Store con búsqueda de nombre en múltiples campos
-// - Consulta directa a WhatsApp si el nombre no se encuentra en el store
+// - NUEVO: Consulta a WhatsApp con CACHÉ para evitar rate-overlimit
 // - Sincronización automática con Google Sheets al iniciar y cada 12h
 // - Limpieza automática del Data Store (mensajes > 30 días)
 // - Soporte multimedia: imágenes, audios, videos, documentos
@@ -54,10 +53,7 @@ const CONFIG = {
     horarios_actualizacion: ['06:00', '18:00'],
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-    // ============================================
-    // NUEVA CONFIGURACIÓN: Tiempo de espera para grupos completos
-    // ============================================
-    tiempo_espera_grupos: 30000 // 30 segundos en milisegundos
+    tiempo_espera_grupos: 30000
 };
 
 // Crear carpetas necesarias
@@ -98,11 +94,47 @@ setInterval(() => {
     store.writeToFile(CONFIG.archivo_store);
 }, 10_000);
 
-// Cache simple para grupos (recomendado por documentación Baileys)
+// ============================================
+// CACHE DE GRUPOS (NUEVO: se usará para guardar metadatos)
+// ============================================
 const groupCache = new Map();
 
 // Variable para llevar registro de imágenes usadas en el lote actual
 let imagenesUsadasEnLote = new Set();
+
+// ============================================
+// NUEVA FUNCIÓN: Obtener metadatos de grupo con CACHÉ
+// ============================================
+async function obtenerMetadataGrupoConCache(sock, groupId) {
+    try {
+        // PASO 1: Verificar si ya está en el caché
+        if (groupCache.has(groupId)) {
+            const cached = groupCache.get(groupId);
+            guardarLogLocal(`   📦 Usando nombre desde caché: ${cached.subject || 'Sin nombre'}`);
+            return cached;
+        }
+        
+        // PASO 2: Si no está en caché, consultar a WhatsApp
+        guardarLogLocal(`   🌐 Consultando a WhatsApp (puede tomar unos segundos): ${groupId}`);
+        const metadata = await sock.groupMetadata(groupId);
+        
+        // PASO 3: Guardar en caché para futuras consultas
+        if (metadata) {
+            groupCache.set(groupId, metadata);
+            guardarLogLocal(`   ✅ Guardado en caché: ${metadata.subject || 'Sin nombre'}`);
+        }
+        
+        return metadata;
+    } catch (error) {
+        guardarLogLocal(`   ❌ Error consultando grupo: ${error.message}`);
+        
+        // Si hay error, devolver null (se intentará en la próxima sincronización)
+        if (error.message.includes('rate-overlimit')) {
+            guardarLogLocal(`   ⚠️ Rate limit detectado. Se reintentará automáticamente en la próxima sincronización.`);
+        }
+        return null;
+    }
+}
 
 // ============================================
 // FUNCIÓN PARA BUSCAR ARCHIVO MULTIMEDIA
@@ -705,7 +737,7 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Obtener TODOS los grupos esperando eventos
+// FUNCIÓN PARA OBTENER GRUPOS CON ESPERA (eventos)
 // ============================================
 async function obtenerGruposConEspera(sock) {
     return new Promise((resolve) => {
@@ -715,7 +747,6 @@ async function obtenerGruposConEspera(sock) {
             const gruposIds = new Set();
             let timeoutCompletado = false;
             
-            // Función para manejar eventos de grupos
             const manejarGroupsUpdate = (updates) => {
                 if (timeoutCompletado) return;
                 
@@ -729,10 +760,8 @@ async function obtenerGruposConEspera(sock) {
                 });
             };
             
-            // Registrar el listener
             sock.ev.on('groups.update', manejarGroupsUpdate);
             
-            // Esperar el tiempo configurado
             setTimeout(() => {
                 timeoutCompletado = true;
                 sock.ev.off('groups.update', manejarGroupsUpdate);
@@ -749,13 +778,12 @@ async function obtenerGruposConEspera(sock) {
 }
 
 // ============================================
-// FUNCIÓN MODIFICADA: Obtener grupos desde Data Store (con espera opcional)
+// FUNCIÓN PRINCIPAL: Obtener grupos desde Data Store (CON CACHÉ MEJORADO)
 // ============================================
 async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     try {
         guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
         
-        // Si se solicita, esperar eventos primero
         let gruposIdsAdicionales = [];
         if (usarEspera) {
             gruposIdsAdicionales = await obtenerGruposConEspera(sock);
@@ -780,10 +808,14 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
         const listaGrupos = [];
         const gruposProcesados = new Set();
         
-        // Primero procesar los grupos del store
+        // ============================================
+        // PROCESAR GRUPOS DEL STORE (CON CACHÉ MEJORADO)
+        // ============================================
         for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
+            let metadata = null;
             
+            // PASO 1: Buscar en el store (lo que ya funcionaba)
             if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
                 nombreGrupo = chat.name;
             }
@@ -800,16 +832,24 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
                 nombreGrupo = chat.title;
             }
             
-            if (nombreGrupo === 'Sin nombre' && sock) {
-                guardarLogLocal(`   ⚠️ Grupo sin nombre en store, consultando a WhatsApp: ${chat.id}`);
-                try {
-                    const metadata = await sock.groupMetadata(chat.id);
+            // PASO 2: Si sigue sin nombre, usar el CACHÉ (nuevo)
+            if (nombreGrupo === 'Sin nombre') {
+                // Verificar si ya está en el caché
+                if (groupCache.has(chat.id)) {
+                    metadata = groupCache.get(chat.id);
                     if (metadata && metadata.subject) {
                         nombreGrupo = metadata.subject;
-                        guardarLogLocal(`   ✅ Nombre obtenido de WhatsApp: ${nombreGrupo}`);
+                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ: ${nombreGrupo}`);
                     }
-                } catch (error) {
-                    guardarLogLocal(`   ❌ Error consultando grupo a WhatsApp: ${error.message}`);
+                }
+            }
+            
+            // PASO 3: Si aún sin nombre, consultar a WhatsApp (y guardar en caché)
+            if (nombreGrupo === 'Sin nombre' && sock) {
+                guardarLogLocal(`   ⚠️ Grupo sin nombre, consultando a WhatsApp con CACHÉ: ${chat.id}`);
+                metadata = await obtenerMetadataGrupoConCache(sock, chat.id);
+                if (metadata && metadata.subject) {
+                    nombreGrupo = metadata.subject;
                 }
             }
             
@@ -820,22 +860,36 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
             gruposProcesados.add(chat.id);
         }
         
-        // Luego procesar los grupos adicionales de eventos que no estén en el store
+        // ============================================
+        // PROCESAR GRUPOS ADICIONALES DE EVENTOS
+        // ============================================
         for (const id of gruposIdsAdicionales) {
             if (!gruposProcesados.has(id) && sock) {
                 guardarLogLocal(`   🔄 Procesando grupo adicional de evento: ${id}`);
-                try {
-                    const metadata = await sock.groupMetadata(id);
+                
+                let nombreGrupo = 'Sin nombre';
+                
+                // Verificar caché primero
+                if (groupCache.has(id)) {
+                    const metadata = groupCache.get(id);
                     if (metadata && metadata.subject) {
-                        listaGrupos.push({
-                            id: id,
-                            nombre: metadata.subject
-                        });
-                        guardarLogLocal(`   ✅ Nombre obtenido para grupo adicional: ${metadata.subject}`);
+                        nombreGrupo = metadata.subject;
+                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ (evento): ${nombreGrupo}`);
                     }
-                } catch (error) {
-                    guardarLogLocal(`   ❌ Error consultando grupo adicional: ${error.message}`);
                 }
+                
+                // Si no está en caché, consultar a WhatsApp
+                if (nombreGrupo === 'Sin nombre') {
+                    const metadata = await obtenerMetadataGrupoConCache(sock, id);
+                    if (metadata && metadata.subject) {
+                        nombreGrupo = metadata.subject;
+                    }
+                }
+                
+                listaGrupos.push({
+                    id: id,
+                    nombre: nombreGrupo
+                });
             }
         }
         
@@ -855,7 +909,6 @@ async function sincronizarGruposConSheets(sock, url_sheets) {
     try {
         guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
         
-        // En sincronización automática, NO usamos espera de 30 segundos
         const grupos = await obtenerGruposDesdeStore(sock, false);
         
         if (grupos.length === 0) {
@@ -939,14 +992,14 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 25.1 (GRUPOS COMPLETOS CON ESPERA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 26.0 (GRUPOS CON CACHÉ)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
-    console.log('🏷️  Nombres de grupos: búsqueda en store + consulta directa');
+    console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
     console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
     console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
@@ -954,7 +1007,7 @@ async function iniciarWhatsApp() {
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
-    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con espera) a CSV + Sheets\n');
+    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1132,13 +1185,13 @@ async function iniciarWhatsApp() {
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                      `🏷️  Nombres de grupos: búsqueda múltiple + consulta directa\n` +
+                                      `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
                                       `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
                                       `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
                                       `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                      `📤 Comando listagrupos: disponible (con espera)\n` +
+                                      `📤 Comando listagrupos: disponible (con caché)\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
@@ -1149,7 +1202,6 @@ async function iniciarWhatsApp() {
                         
                         await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
                         
-                        // Usar espera de 30 segundos SOLO para el comando listagrupos
                         const grupos = await obtenerGruposDesdeStore(sock, true);
                         
                         if (grupos.length === 0) {
@@ -1165,7 +1217,7 @@ async function iniciarWhatsApp() {
                         confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
                         confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
                         confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                        confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
+                        confirmacion += `📚 Fuente: Data Store local + CACHÉ + eventos (30s espera)`;
                         
                         await sock.sendMessage(remitente, { text: confirmacion });
                     }
@@ -1176,7 +1228,7 @@ async function iniciarWhatsApp() {
         console.log('\n📝 Comandos disponibles en WhatsApp:');
         console.log('   - "actualizar" - Forzar descarga de agenda');
         console.log('   - "status" - Ver estado del bot');
-        console.log('   - "listagrupos" - Exporta TODOS los grupos (con 30s de espera) a CSV + Sheets');
+        console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
