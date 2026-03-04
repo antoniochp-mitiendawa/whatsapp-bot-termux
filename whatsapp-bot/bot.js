@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 33.0 - INTERCEPTOR DE RESPUESTAS PARA STATUS
+// Versión: 34.0 - INTERCEPTOR CORREGIDO
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -22,8 +22,7 @@
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
 // - NUEVO: Forzar sesión con status@broadcast antes de enviar
-// - NUEVO: Sistema de prueba de múltiples formatos para estados
-// - NUEVO: Interceptor de respuestas para status@broadcast
+// - NUEVO: Sistema robusto de reintentos (5 intentos)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1294,107 +1293,59 @@ async function forzarSesionStatus(sock) {
 }
 
 // ============================================
-// NUEVO: INTERCEPTOR DE RESPUESTAS PARA STATUS
-// ============================================
-
-// Variable para almacenar el interceptor
-let statusInterceptorActivo = false;
-
-// Función para activar el interceptor
-function activarInterceptorStatus(sock) {
-    if (statusInterceptorActivo) return;
-    
-    guardarLogLocal('   🛡️ Activando interceptor de respuestas para status@broadcast...');
-    
-    // Guardar referencia al método original de procesamiento de mensajes
-    const procesadorOriginal = sock.ev.listeners('messages.upsert')[0];
-    
-    // Crear un nuevo listener que intercepte antes
-    sock.ev.on('messages.upsert', async (m) => {
-        // Verificar si es una respuesta de status@broadcast
-        if (m.messages && m.messages[0] && m.messages[0].key && m.messages[0].key.remoteJid === 'status@broadcast') {
-            guardarLogLocal('      🛡️ Interceptada respuesta de status@broadcast');
-            
-            // Crear una respuesta artificial que Baileys pueda entender
-            // Esto evita que intente acceder a propiedades undefined
-            if (!m.messages[0].message) {
-                m.messages[0].message = { protocolMessage: { type: 0 } };
-            }
-            
-            // Asegurar que exista la estructura que Baileys espera
-            if (!m.messages[0].messageStubParameters) {
-                m.messages[0].messageStubParameters = [];
-            }
-            
-            guardarLogLocal('      ✅ Respuesta normalizada');
-        }
-    });
-    
-    statusInterceptorActivo = true;
-    guardarLogLocal('   ✅ Interceptor activado');
-}
-
-// ============================================
-// NUEVA FUNCIÓN MEJORADA: Publicar historia con interceptor
+// NUEVA FUNCIÓN MEJORADA: Publicar historia con reintentos robustos
 // ============================================
 async function publicarHistoria(sock, archivoInfo) {
     try {
-        // Activar el interceptor si no está activo
-        activarInterceptorStatus(sock);
-        
-        // Forzar sesión ANTES de cada intento
-        await forzarSesionStatus(sock);
-
         const buffer = fs.readFileSync(archivoInfo.ruta);
         const emoji = obtenerEmojiParaHistoria(archivoInfo.nombreSinExtension, archivoInfo.extension);
         const texto = `${emoji} ${archivoInfo.nombreSinExtension}`;
         
-        guardarLogLocal(`   📤 Intentando publicar historia: ${archivoInfo.nombre}`);
-
-        // Usar SOLO el Formato 1 (que ya sabemos que funciona cuando la conexión es estable)
-        try {
-            guardarLogLocal(`      ▶️ Usando formato estándar con reintentos`);
-            
-            // Intentar hasta 3 veces con el Formato 1
-            for (let intento = 1; intento <= 3; intento++) {
-                try {
-                    guardarLogLocal(`         Intento ${intento}/3...`);
-                    
-                    await sock.sendMessage('status@broadcast', {
-                        image: buffer,
-                        caption: texto,
-                        backgroundColor: '#000000',
-                        font: 1,
-                        statusJidList: [],
-                        broadcast: true
-                    });
-                    
-                    guardarLogLocal(`      ✅ ÉXITO en intento ${intento}`);
-                    
-                    // Esperar un momento para asegurar que se procesó
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    return 'HISTORIA PUBLICADA';
-                } catch (error) {
-                    guardarLogLocal(`         ❌ Falló intento ${intento}: ${error.message.substring(0, 50)}`);
-                    
-                    if (intento < 3) {
-                        // Esperar antes de reintentar
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                        // Reforzar sesión antes del siguiente intento
-                        await forzarSesionStatus(sock);
-                    }
+        guardarLogLocal(`   📤 Publicando historia: ${archivoInfo.nombre}`);
+        
+        // Máximo 5 intentos
+        const MAX_INTENTOS = 5;
+        
+        for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+            try {
+                guardarLogLocal(`      Intento ${intento}/${MAX_INTENTOS}...`);
+                
+                // Forzar sesión antes de cada intento
+                await forzarSesionStatus(sock);
+                
+                await sock.sendMessage('status@broadcast', {
+                    image: buffer,
+                    caption: texto,
+                    backgroundColor: '#000000',
+                    font: 1,
+                    statusJidList: [],
+                    broadcast: true
+                });
+                
+                guardarLogLocal(`      ✅ ÉXITO en intento ${intento}`);
+                
+                // Esperar un momento para asegurar que se procesó
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                return 'HISTORIA PUBLICADA';
+                
+            } catch (error) {
+                const errorMsg = error.message || '';
+                guardarLogLocal(`         ❌ Falló intento ${intento}: ${errorMsg.substring(0, 100)}`);
+                
+                // Si es el último intento, no esperamos
+                if (intento < MAX_INTENTOS) {
+                    // Esperar progresivamente más tiempo entre intentos
+                    const espera = intento * 2000; // 2s, 4s, 6s, 8s
+                    guardarLogLocal(`         ⏱️ Esperando ${espera/1000}s antes de reintentar...`);
+                    await new Promise(resolve => setTimeout(resolve, espera));
                 }
             }
-            
-            guardarLogLocal('   ❌ Todos los intentos fallaron');
-            return 'ERROR: No se pudo publicar después de 3 intentos';
-            
-        } catch (error) {
-            guardarLogLocal(`   ❌ Error en formato principal: ${error.message}`);
-            return 'ERROR: ' + error.message.substring(0, 50);
         }
-
+        
+        guardarLogLocal('   ❌ Todos los intentos fallaron');
+        return 'ERROR: No se pudo publicar después de 5 intentos';
+        
     } catch (error) {
         guardarLogLocal(`   ❌ Error publicando historia: ${error.message}`);
         return 'ERROR: ' + error.message.substring(0, 50);
@@ -1486,7 +1437,7 @@ async function procesarHistorias(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 33.0 (INTERCEPTOR DE RESPUESTAS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 34.0 (REINTENTOS ROBUSTOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1502,8 +1453,7 @@ async function iniciarWhatsApp() {
     console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
     console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
     console.log('🔐 NUEVO: Sesión forzada con status@broadcast');
-    console.log('🛡️ NUEVO: Interceptor de respuestas para status@broadcast');
-    console.log('🔄 NUEVO: Sistema de reintentos (3 intentos)');
+    console.log('🔄 NUEVO: Sistema robusto de reintentos (5 intentos)');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1615,11 +1565,6 @@ async function iniciarWhatsApp() {
                 // ============================================
                 guardarLogLocal('🔐 Forzando sesión inicial con status@broadcast...');
                 await forzarSesionStatus(sock);
-                
-                // ============================================
-                // NUEVO: Activar interceptor
-                // ============================================
-                activarInterceptorStatus(sock);
             }
 
             if (connection === 'close') {
@@ -1750,8 +1695,7 @@ async function iniciarWhatsApp() {
                                   `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
                                   `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
                                   `🔐  Sesión forzada: ACTIVADA\n` +
-                                  `🛡️  Interceptor: ACTIVADO\n` +
-                                  `🔄  Reintentos: 3 intentos\n` +
+                                  `🔄  Reintentos: 5 intentos\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
