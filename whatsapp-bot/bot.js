@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 34.0 - INTERCEPTOR CORREGIDO
+// Versión: 35.0 - ESTADOS EN SEGUNDO PLANO
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -21,8 +21,7 @@
 // - Logs solo locales
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
-// - NUEVO: Forzar sesión con status@broadcast antes de enviar
-// - NUEVO: Sistema robusto de reintentos (5 intentos)
+// - NUEVO: Publicación en segundo plano con cron cada minuto
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1266,34 +1265,7 @@ function marcarHistoriaPublicada(nombreArchivo) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Forzar sesión con status@broadcast
-// ============================================
-async function forzarSesionStatus(sock) {
-    try {
-        guardarLogLocal(`   🔐 Forzando sesión con status@broadcast...`);
-        
-        // Intentar obtener metadatos de status (esto fuerza el establecimiento de sesión)
-        try {
-            // Enviar un mensaje vacío o un ping para forzar la sesión
-            await sock.sendMessage('status@broadcast', {
-                text: '.' // Mensaje de punto que se eliminará
-            });
-            guardarLogLocal(`   ✅ Sesión forzada correctamente`);
-        } catch (e) {
-            // Ignorar error, lo importante es que intentó establecer sesión
-            guardarLogLocal(`   ⚠️ Intento de sesión realizado (error esperado)`);
-        }
-        
-        // Esperar un momento para que se establezca
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error forzando sesión: ${error.message}`);
-    }
-}
-
-// ============================================
-// NUEVA FUNCIÓN MEJORADA: Publicar historia con reintentos robustos
+// NUEVA FUNCIÓN: Publicar historia (SIMPLE - UNA SOLA VEZ)
 // ============================================
 async function publicarHistoria(sock, archivoInfo) {
     try {
@@ -1301,53 +1273,19 @@ async function publicarHistoria(sock, archivoInfo) {
         const emoji = obtenerEmojiParaHistoria(archivoInfo.nombreSinExtension, archivoInfo.extension);
         const texto = `${emoji} ${archivoInfo.nombreSinExtension}`;
         
-        guardarLogLocal(`   📤 Publicando historia: ${archivoInfo.nombre}`);
+        guardarLogLocal(`   📤 Enviando estado: ${archivoInfo.nombre}`);
         
-        // Máximo 5 intentos
-        const MAX_INTENTOS = 5;
+        // UNA SOLA PETICIÓN - SIN REINTENTOS - SIN COMPLICACIONES
+        await sock.sendMessage('status@broadcast', {
+            image: buffer,
+            caption: texto
+        });
         
-        for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-            try {
-                guardarLogLocal(`      Intento ${intento}/${MAX_INTENTOS}...`);
-                
-                // Forzar sesión antes de cada intento
-                await forzarSesionStatus(sock);
-                
-                await sock.sendMessage('status@broadcast', {
-                    image: buffer,
-                    caption: texto,
-                    backgroundColor: '#000000',
-                    font: 1,
-                    statusJidList: [],
-                    broadcast: true
-                });
-                
-                guardarLogLocal(`      ✅ ÉXITO en intento ${intento}`);
-                
-                // Esperar un momento para asegurar que se procesó
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                return 'HISTORIA PUBLICADA';
-                
-            } catch (error) {
-                const errorMsg = error.message || '';
-                guardarLogLocal(`         ❌ Falló intento ${intento}: ${errorMsg.substring(0, 100)}`);
-                
-                // Si es el último intento, no esperamos
-                if (intento < MAX_INTENTOS) {
-                    // Esperar progresivamente más tiempo entre intentos
-                    const espera = intento * 2000; // 2s, 4s, 6s, 8s
-                    guardarLogLocal(`         ⏱️ Esperando ${espera/1000}s antes de reintentar...`);
-                    await new Promise(resolve => setTimeout(resolve, espera));
-                }
-            }
-        }
-        
-        guardarLogLocal('   ❌ Todos los intentos fallaron');
-        return 'ERROR: No se pudo publicar después de 5 intentos';
+        guardarLogLocal(`   ✅ Estado enviado correctamente en segundo plano`);
+        return 'HISTORIA PUBLICADA';
         
     } catch (error) {
-        guardarLogLocal(`   ❌ Error publicando historia: ${error.message}`);
+        guardarLogLocal(`   ❌ Error: ${error.message}`);
         return 'ERROR: ' + error.message.substring(0, 50);
     }
 }
@@ -1417,11 +1355,11 @@ async function procesarHistorias(sock) {
             return;
         }
         
-        guardarLogLocal(`📢 Publicando historia: ${siguiente.nombre}`);
+        guardarLogLocal(`📢 Procesando historia: ${siguiente.nombre}`);
         
         const resultado = await publicarHistoria(sock, siguiente);
         
-        if (resultado.startsWith('HISTORIA')) {
+        if (resultado === 'HISTORIA PUBLICADA') {
             marcarHistoriaPublicada(siguiente.nombre);
         }
         
@@ -1433,11 +1371,11 @@ async function procesarHistorias(sock) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (CON ESTADOS AUTOMÁTICOS)
+// INICIAR CONEXIÓN WHATSAPP (CON ESTADOS EN SEGUNDO PLANO)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 34.0 (REINTENTOS ROBUSTOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 35.0 (ESTADOS EN SEGUNDO PLANO)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1452,8 +1390,7 @@ async function iniciarWhatsApp() {
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
     console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
     console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
-    console.log('🔐 NUEVO: Sesión forzada con status@broadcast');
-    console.log('🔄 NUEVO: Sistema robusto de reintentos (5 intentos)');
+    console.log('🔄 NUEVO: Publicación en segundo plano (cron cada minuto)');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1559,12 +1496,6 @@ async function iniciarWhatsApp() {
                 // ============================================
                 guardarLogLocal('📢 Inicializando sistema de Historias...');
                 actualizarColaHistorias();
-                
-                // ============================================
-                // NUEVO: Forzar sesión con status al conectar
-                // ============================================
-                guardarLogLocal('🔐 Forzando sesión inicial con status@broadcast...');
-                await forzarSesionStatus(sock);
             }
 
             if (connection === 'close') {
@@ -1612,7 +1543,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // NUEVO: Cron para historias (cada minuto)
+        // NUEVO: Cron para historias (cada minuto - SEGUNDO PLANO)
         // ============================================
         cron.schedule('* * * * *', async () => {
             await procesarHistorias(sock);
@@ -1694,8 +1625,7 @@ async function iniciarWhatsApp() {
                                   `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
                                   `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
                                   `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
-                                  `🔐  Sesión forzada: ACTIVADA\n` +
-                                  `🔄  Reintentos: 5 intentos\n` +
+                                  `🔄  Segundo plano: ACTIVADO (cron cada minuto)\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
