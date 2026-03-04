@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 31.0 - SESIÓN FORZADA PARA STATUS
+// Versión: 32.0 - FORMATOS DE PRUEBA PARA ESTADOS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -22,6 +22,7 @@
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
 // - NUEVO: Forzar sesión con status@broadcast antes de enviar
+// - NUEVO: Sistema de prueba de múltiples formatos para estados
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1269,7 +1270,7 @@ function marcarHistoriaPublicada(nombreArchivo) {
 // ============================================
 async function forzarSesionStatus(sock) {
     try {
-        guardarLogLocal('   🔐 Forzando sesión con status@broadcast...');
+        guardarLogLocal(`   🔐 Forzando sesión con status@broadcast...`);
         
         // Intentar obtener metadatos de status (esto fuerza el establecimiento de sesión)
         try {
@@ -1277,10 +1278,10 @@ async function forzarSesionStatus(sock) {
             await sock.sendMessage('status@broadcast', {
                 text: '.' // Mensaje de punto que se eliminará
             });
-            guardarLogLocal('   ✅ Sesión forzada correctamente');
+            guardarLogLocal(`   ✅ Sesión forzada correctamente`);
         } catch (e) {
             // Ignorar error, lo importante es que intentó establecer sesión
-            guardarLogLocal('   ⚠️ Intento de sesión realizado (error esperado)');
+            guardarLogLocal(`   ⚠️ Intento de sesión realizado (error esperado)`);
         }
         
         // Esperar un momento para que se establezca
@@ -1291,59 +1292,99 @@ async function forzarSesionStatus(sock) {
     }
 }
 
-// --- Función para publicar una historia (estado) CON SESIÓN FORZADA ---
+// ============================================
+// NUEVA FUNCIÓN MEJORADA: Publicar historia con múltiples formatos de prueba
+// ============================================
 async function publicarHistoria(sock, archivoInfo) {
     try {
-        // FORZAR SESIÓN ANTES DE CADA PUBLICACIÓN
+        // Forzar sesión ANTES de cada intento
         await forzarSesionStatus(sock);
-        
+
         const buffer = fs.readFileSync(archivoInfo.ruta);
         const emoji = obtenerEmojiParaHistoria(archivoInfo.nombreSinExtension, archivoInfo.extension);
         const texto = `${emoji} ${archivoInfo.nombreSinExtension}`;
         
-        guardarLogLocal(`   📤 Publicando historia: ${archivoInfo.nombre}`);
-        
-        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(archivoInfo.extension)) {
-            await sock.sendMessage('status@broadcast', {
+        guardarLogLocal(`   📤 Intentando publicar historia: ${archivoInfo.nombre} (modo experimental)`);
+
+        // --- DEFINIR 5 FORMATOS DE PRUEBA ---
+        const formatosDePrueba = [];
+
+        // Formato 1: El actual (con todas las opciones)
+        formatosDePrueba.push({
+            descripcion: "Formato 1 (Actual: con caption, bgColor, font, statusJidList)",
+            payload: {
                 image: buffer,
                 caption: texto,
                 backgroundColor: '#000000',
                 font: 1,
                 statusJidList: [],
                 broadcast: true
-            });
-            return 'HISTORIA IMAGEN PUBLICADA';
-        }
-        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(archivoInfo.extension)) {
-            await sock.sendMessage('status@broadcast', {
-                video: buffer,
+            }
+        });
+
+        // Formato 2: Sin 'caption', el texto como propiedad aparte
+        formatosDePrueba.push({
+            descripcion: "Formato 2 (Sin caption, texto como propiedad aparte)",
+            payload: {
+                image: buffer,
+                text: texto,
+                backgroundColor: '#000000',
+                font: 1,
+                statusJidList: [],
+                broadcast: true
+            }
+        });
+
+        // Formato 3: El más básico, solo imagen y texto
+        formatosDePrueba.push({
+            descripcion: "Formato 3 (Solo imagen y texto)",
+            payload: {
+                image: buffer,
+                caption: texto
+            }
+        });
+
+        // Formato 4: Imagen con 'viewOnce' (como un mensaje que se autodestruye)
+        formatosDePrueba.push({
+            descripcion: "Formato 4 (ViewOnce)",
+            payload: {
+                image: buffer,
                 caption: texto,
-                backgroundColor: '#000000',
-                font: 1,
-                statusJidList: [],
-                broadcast: true
+                viewOnce: true
+            }
+        });
+
+        // Formato 5: Intentando como 'documento' (para ver si es un problema de MIME type)
+        if (archivoInfo.extension === '.jpg' || archivoInfo.extension === '.jpeg') {
+            formatosDePrueba.push({
+                descripcion: "Formato 5 (Como documento)",
+                payload: {
+                    document: buffer,
+                    fileName: archivoInfo.nombre,
+                    caption: texto,
+                    mimetype: 'image/jpeg'
+                }
             });
-            return 'HISTORIA VIDEO PUBLICADA';
         }
-        else if (['.mp3', '.ogg', '.m4a', '.wav'].includes(archivoInfo.extension)) {
-            let mimetype = 'audio/mpeg';
-            if (archivoInfo.extension === '.ogg') mimetype = 'audio/ogg';
-            if (archivoInfo.extension === '.m4a') mimetype = 'audio/mp4';
-            if (archivoInfo.extension === '.wav') mimetype = 'audio/wav';
-            
-            await sock.sendMessage('status@broadcast', {
-                audio: buffer,
-                mimetype: mimetype,
-                backgroundColor: '#000000',
-                font: 1,
-                statusJidList: [],
-                broadcast: true
-            });
-            return 'HISTORIA AUDIO PUBLICADA';
+
+        // --- PROBAR CADA FORMATO SECUENCIALMENTE ---
+        for (const formato of formatosDePrueba) {
+            try {
+                guardarLogLocal(`      ▶️ Probando: ${formato.descripcion}`);
+                await sock.sendMessage('status@broadcast', formato.payload);
+                guardarLogLocal(`      ✅ ÉXITO con: ${formato.descripcion}`);
+                return 'HISTORIA PUBLICADA (formato experimental)';
+            } catch (error) {
+                guardarLogLocal(`      ❌ Falló: ${error.message.substring(0, 100)}`);
+                // Pequeña pausa entre intentos para no saturar
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         }
-        
-        return 'ERROR: Formato no soportado';
-        
+
+        // Si llegamos aquí, ningún formato funcionó
+        guardarLogLocal('   ❌ Todos los formatos fallaron');
+        return 'ERROR: Ningún formato funcionó';
+
     } catch (error) {
         guardarLogLocal(`   ❌ Error publicando historia: ${error.message}`);
         return 'ERROR: ' + error.message.substring(0, 50);
@@ -1435,7 +1476,7 @@ async function procesarHistorias(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 31.0 (SESIÓN FORZADA PARA STATUS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 32.0 (FORMATOS DE PRUEBA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1451,6 +1492,7 @@ async function iniciarWhatsApp() {
     console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
     console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
     console.log('🔐 NUEVO: Sesión forzada con status@broadcast');
+    console.log('🧪 NUEVO: Sistema de prueba de 5 formatos diferentes');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1692,6 +1734,7 @@ async function iniciarWhatsApp() {
                                   `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
                                   `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
                                   `🔐  Sesión forzada: ACTIVADA\n` +
+                                  `🧪  Modo prueba: 5 formatos\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
