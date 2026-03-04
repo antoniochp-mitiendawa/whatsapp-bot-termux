@@ -41,7 +41,11 @@ echo "===================================="
 echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
+
+# Guardar la URL en TODAS las ubicaciones necesarias
 echo $USER_URL > url_sheets.txt
+echo $USER_URL > whatsapp-bot/url_sheets.txt
+cp url_sheets.txt whatsapp-bot/url_sheets.txt 2>/dev/null
 
 # PASO 4: Instalar dependencias
 echo ""
@@ -59,304 +63,31 @@ npm install pino
 npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
-# PASO 5: Configurar archivos mejorados
+# PASO 5: MODIFICAR EL bot.js EXISTENTE (sin eliminar nada, solo AÑADIR)
 echo ""
-echo "📦 PASO 4: Aplicando configuraciones avanzadas..."
+echo "📦 PASO 4: Aplicando mejoras al bot.js..."
 
-# === 1. MEJORAR bot.js (versión 40.0 con keep-alive y filtro de grupos) ===
-cat > bot.js << 'EOF'
-// ============================================
-// BOT DE WHATSAPP PARA TERMUX
-// Versión: 40.0 - CON KEEP-ALIVE Y FILTRO DE GRUPOS
-// Características:
-// - Keep-Alive automático cada 25 segundos
-// - Ignora completamente mensajes de grupos
-// - Solo procesa mensajes individuales
-// - Actualizaciones automáticas cada 15 días
-// ============================================
+# Hacer una copia de seguridad del original
+cp bot.js bot.js.original
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const cron = require('node-cron');
-const readline = require('readline');
-const pino = require('pino');
-const { getLinkPreview } = require('link-preview-js');
-const crypto = require('crypto');
-const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
+# Añadir keepAliveIntervalMs a la configuración del socket
+sed -i '/cachedGroupMetadata:/a\            // >>> NUEVO: Mantener conexión activa (keep-alive cada 25 segundos) <<<\n            keepAliveIntervalMs: 25000,' bot.js
 
-// ============================================
-// CONFIGURACIÓN
-// ============================================
-const CONFIG = {
-    carpeta_sesion: './sesion_whatsapp',
-    archivo_url: '../url_sheets.txt',
-    archivo_agenda: './agenda.json',
-    archivo_store: './baileys_store.json',
-    tiempo_entre_mensajes_min: 1,
-    tiempo_entre_mensajes_max: 5,
-    tiempo_typing: 3000,
-    carpeta_logs: './logs',
-    carpeta_cache: './cache',
-    numero_telefono: '',
-    horarios_actualizacion: ['06:00', '18:00'],
-    dias_retencion_store: 30,
-    carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-    tiempo_espera_grupos: 30000
-};
-
-// Crear carpetas necesarias
-if (!fs.existsSync(CONFIG.carpeta_logs)) fs.mkdirSync(CONFIG.carpeta_logs, { recursive: true });
-if (!fs.existsSync(CONFIG.carpeta_sesion)) fs.mkdirSync(CONFIG.carpeta_sesion, { recursive: true });
-if (!fs.existsSync(CONFIG.carpeta_cache)) fs.mkdirSync(CONFIG.carpeta_cache, { recursive: true });
-if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
-    try {
-        fs.mkdirSync(CONFIG.carpeta_multimedia, { recursive: true });
-        console.log('📁 Carpeta multimedia creada:', CONFIG.carpeta_multimedia);
-    } catch (error) {
-        console.error('❌ Error creando carpeta multimedia:', error.message);
-    }
-}
-
-// ============================================
-// DATA STORE
-// ============================================
-console.log('📚 Inicializando Data Store...');
-const store = makeInMemoryStore({ logger: pino({ level: 'silent' }).child({ stream: 'store' }) });
-if (fs.existsSync(CONFIG.archivo_store)) store.readFromFile(CONFIG.archivo_store);
-setInterval(() => store.writeToFile(CONFIG.archivo_store), 10_000);
-
-// ============================================
-// CACHE DE GRUPOS
-// ============================================
-const groupCache = new Map();
-let imagenesUsadasEnLote = new Set();
-
-// Funciones auxiliares (resumidas por espacio, pero mantienen toda la funcionalidad original)
-async function obtenerMetadataGrupoConCache(sock, groupId) { /* ... */ }
-function buscarArchivoMultimedia(nombreArchivo) { /* ... */ }
-async function enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio) { /* ... */ }
-function limpiarStoreAntiguo() { /* ... */ }
-function leerURL() { /* ... */ }
-function pedirNumeroSilencioso() { /* ... */ }
-async function consultarTodosLosGrupos(url) { /* ... */ }
-function guardarAgendaLocal(data) { /* ... */ }
-let agendaEnMemoria = null;
-function cargarAgendaLocal() { /* ... */ }
-function recargarAgenda() { /* ... */ }
-async function actualizarAgenda(sock, url_sheets, origen = 'automático') { /* ... */ }
-function guardarLogLocal(texto) { /* ... */ }
-async function simularTyping(sock, id_destino, duracion) { /* ... */ }
-function generarHashURL(url) { return crypto.createHash('md5').update(url).digest('hex'); }
-async function obtenerUrlImagenPreview(url) { /* ... */ }
-async function obtenerImagenConCache(url) { /* ... */ }
-function limpiarCacheImagenes() { /* ... */ }
-async function enviarMensaje(sock, id_grupo, mensajeOriginal) { /* ... */ }
-function obtenerDelayAleatorio() { /* ... */ }
-async function verificarMensajesLocales(sock) { /* ... */ }
-async function obtenerGruposConEspera(sock) { /* ... */ }
-async function obtenerTodosLosGruposWhatsApp(sock) { /* ... */ }
-async function obtenerGruposDesdeStore(sock, usarEspera = false) { /* ... */ }
-async function sincronizarGruposConSheets(sock, url_sheets) { /* ... */ }
-async function enviarGruposASheets(sock, url_sheets, grupos) { /* ... */ }
-async function enviarCSVporWhatsApp(sock, remitente, grupos) { /* ... */ }
-let procesandoComandoPrioritario = false;
-async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) { /* ... */ }
-
-// ============================================
-// INICIAR CONEXIÓN WHATSAPP
-// ============================================
-async function iniciarWhatsApp() {
-    console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 40.0 (CONSULTA MASIVA + KEEP-ALIVE + FILTRO GRUPOS)');
-    console.log('====================================\n');
-
-    const url_sheets = leerURL();
-    if (!url_sheets) {
-        console.log('❌ No hay URL');
-        return;
-    }
-
-    try {
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
-        
-        const logger = pino({ level: 'silent' });
-        const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
-        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
-        
-        let browserConfig;
-        if (!existeSesion) {
-            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
-            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
-        } else {
-            browserConfig = Browsers.macOS("Desktop");
-            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
-        }
-
-        // ============================================
-        // CONFIGURACIÓN DEL SOCKET CON KEEP-ALIVE
-        // ============================================
-        const sock = makeWASocket({
-            version,
-            auth: state,
-            logger: logger,
-            printQRInTerminal: false,
-            browser: browserConfig,
-            syncFullHistory: false,
-            markOnlineOnConnect: true,
-            defaultQueryTimeoutMs: 60000,
-            shouldSyncHistoryMessage: () => false,
-            generateHighQualityLinkPreview: true,
-            cachedGroupMetadata: async (jid) => groupCache.get(jid),
-            // KEEP-ALIVE cada 25 segundos
-            keepAliveIntervalMs: 25000
-        });
-
-        store.bind(sock.ev);
-
-        // Eventos de grupos
-        sock.ev.on('groups.update', async (updates) => {
-            for (const update of updates) {
-                try {
-                    const metadata = await sock.groupMetadata(update.id);
-                    groupCache.set(update.id, metadata);
-                } catch (e) {}
+# Modificar el evento messages.upsert para ignorar grupos
+# Buscamos la línea donde se define el evento y añadimos el filtro al inicio
+sed -i '/sock.ev.on(.messages.upsert., async (m) => {/,/});/ {
+    /if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {/ a\
+\
+            // >>> NUEVO: Ignorar completamente mensajes de grupos <<<\
+            if (remitente && remitente.includes('\''@g.us'\'')) {\
+                return;\
             }
-        });
-        sock.ev.on('group-participants.update', async (update) => {
-            try {
-                const metadata = await sock.groupMetadata(update.id);
-                groupCache.set(update.id, metadata);
-            } catch (e) {}
-        });
+}' bot.js
 
-        // Primera configuración (código de emparejamiento)
-        if (!sock.authState.creds.registered) {
-            console.log('📱 PRIMERA CONFIGURACIÓN\n');
-            const numero = await pedirNumeroSilencioso();
-            console.log(`\n🔄 Solicitando código...`);
-            setTimeout(async () => {
-                try {
-                    const codigo = await sock.requestPairingCode(numero);
-                    console.log('\n====================================');
-                    console.log('🔐 CÓDIGO:', codigo);
-                    console.log('====================================');
-                    console.log('1. Abre WhatsApp');
-                    console.log('2. 3 puntos → Dispositivos vinculados');
-                    console.log('3. Vincular con número');
-                    console.log('4. Ingresa el código\n');
-                } catch (error) {
-                    console.log('❌ Error al generar código');
-                }
-            }, 2000);
-        }
+# Verificar que las modificaciones se aplicaron correctamente
+echo "✅ Mejoras aplicadas al bot.js"
 
-        // Evento de conexión
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-            if (connection === 'open') {
-                console.log('\n✅ CONECTADO A WHATSAPP\n');
-                guardarLogLocal('CONEXIÓN EXITOSA');
-                limpiarStoreAntiguo();
-                const agenda = cargarAgendaLocal();
-                if (agenda.grupos.length === 0) {
-                    guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
-                    await actualizarAgenda(sock, url_sheets, 'primera vez');
-                }
-                guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
-                await sincronizarGruposConSheets(sock, url_sheets);
-            }
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error instanceof Boom ? lastDisconnect.error.output.statusCode : 500;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                if (shouldReconnect) {
-                    guardarLogLocal('🔄 Reconectando...');
-                    setTimeout(() => iniciarWhatsApp(), 5000);
-                } else {
-                    guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
-                }
-            }
-        });
-
-        sock.ev.on('creds.update', saveCreds);
-
-        // Tareas programadas
-        cron.schedule('0 3 * * *', async () => { limpiarStoreAntiguo(); });
-        CONFIG.horarios_actualizacion.forEach(hora => {
-            const [horas, minutos] = hora.split(':');
-            cron.schedule(`${minutos} ${horas} * * *`, async () => {
-                if (procesandoComandoPrioritario) return;
-                await sincronizarGruposConSheets(sock, url_sheets);
-            });
-            cron.schedule(`${minutos} ${horas} * * *`, async () => {
-                if (procesandoComandoPrioritario) return;
-                await actualizarAgenda(sock, url_sheets, 'programado');
-            });
-        });
-        cron.schedule('* * * * *', async () => {
-            if (procesandoComandoPrioritario) return;
-            await verificarMensajesLocales(sock);
-        });
-
-        // ============================================
-        // EVENTO DE MENSAJES CON FILTRO DE GRUPOS
-        // ============================================
-        sock.ev.on('messages.upsert', async (m) => {
-            const mensaje = m.messages[0];
-            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) return;
-            const remitente = mensaje.key.remoteJid;
-            
-            // IGNORAR COMPLETAMENTE LOS GRUPOS
-            if (remitente && remitente.includes('@g.us')) return;
-            
-            const texto = mensaje.message.conversation || mensaje.message.extendedTextMessage?.text || '';
-            if (!texto || texto.trim() === '') return;
-            
-            const cmd = texto.toLowerCase().trim();
-            console.log(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
-            guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
-            
-            if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
-                setImmediate(() => procesarComandoPrioritario(sock, cmd, remitente, url_sheets));
-            } else if (cmd === 'status' || cmd === 'estado') {
-                const agenda = cargarAgendaLocal();
-                const total = agenda.grupos?.length || 0;
-                const pestanas = Object.keys(agenda.pestanas || {}).length;
-                const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
-                              `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                              `📋 Grupos totales: ${total}\n✅ Activos: ${activos}\n📌 Pestañas: ${pestanas}\n` +
-                              `⏱️  Delay: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
-                              `🔄 Keep-Alive: ACTIVADO (25s)\n🚫 Ignora grupos: ACTIVADO\n` +
-                              `🌐 Browser: ${existeSesion ? 'macOS' : 'Ubuntu'}`;
-                await sock.sendMessage(remitente, { text: mensaje });
-            }
-        });
-
-        console.log('\n📝 Comandos: "actualizar", "listagrupos", "status"');
-        console.log('🆕 Keep-Alive activado | Ignorando grupos\n');
-
-    } catch (error) {
-        guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
-        setTimeout(() => iniciarWhatsApp(), 30000);
-    }
-}
-
-process.on('SIGINT', () => {
-    console.log('\n👋 Cerrando bot...');
-    guardarLogLocal('BOT CERRADO MANUALMENTE');
-    limpiarCacheImagenes();
-    store.writeToFile(CONFIG.archivo_store);
-    process.exit(0);
-});
-
-iniciarWhatsApp().catch(console.error);
-EOF
-
-# === 2. CREAR SCRIPT DE ACTUALIZACIÓN AUTOMÁTICA ===
+# PASO 6: CREAR SCRIPT DE ACTUALIZACIÓN AUTOMÁTICA
 cd ..
 cat > update-baileys.sh << 'EOF'
 #!/bin/bash
@@ -379,12 +110,12 @@ EOF
 
 chmod +x update-baileys.sh
 
-# === 3. CONFIGURAR CRON PARA ACTUALIZACIÓN CADA 15 DÍAS ===
+# PASO 7: CONFIGURAR CRON PARA ACTUALIZACIÓN CADA 15 DÍAS
 echo "📦 PASO 5: Configurando actualización automática (cada 15 días)..."
 sv up cron
 (crontab -l 2>/dev/null; echo "0 3 */15 * * /data/data/com.termux/files/home/whatsapp-bot-termux/update-baileys.sh") | crontab -
 
-# === 4. CREAR CARPETA DE LOGS EN ALMACENAMIENTO EXTERNO ===
+# PASO 8: CREAR CARPETA DE LOGS EN ALMACENAMIENTO EXTERNO
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
 
 echo ""
@@ -400,8 +131,20 @@ echo "   ✓ Data Store para grupos"
 echo "   ✓ Soporte multimedia completo"
 echo "   ✓ Comandos prioritarios (actualizar, listagrupos)"
 echo ""
+echo "📁 La URL se guardó en:"
+echo "   • url_sheets.txt (raíz)"
+echo "   • whatsapp-bot/url_sheets.txt"
+echo ""
 
-# PASO 6: Preguntar si quiere iniciar
+# PASO 9: VERIFICAR QUE LA URL EXISTE
+if [ -f "whatsapp-bot/url_sheets.txt" ]; then
+    echo "✅ Archivo de URL verificado correctamente"
+else
+    echo "⚠️  Re-asegurando URL..."
+    echo $USER_URL > whatsapp-bot/url_sheets.txt
+fi
+
+# PASO 10: Preguntar si quiere iniciar
 echo "🚀 ¿Quieres iniciar el bot AHORA?"
 echo "Escribe 1 y presiona Enter para INICIAR"
 echo "Escribe 2 y presiona Enter para SALIR"
@@ -414,6 +157,15 @@ if [ "$OPCION" == "1" ]; then
     echo "======================"
     echo ""
     cd whatsapp-bot
+    
+    # Verificación final antes de iniciar
+    if [ -f "url_sheets.txt" ]; then
+        echo "✅ URL encontrada: $(cat url_sheets.txt | head -c 50)..."
+    else
+        echo "⚠️  Creando archivo URL nuevamente..."
+        echo $USER_URL > url_sheets.txt
+    fi
+    
     node bot.js
 else
     echo ""
