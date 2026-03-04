@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 38.0 - OPTIMIZADO (agenda local mejorada)
+// Versión: 39.0 - CONSULTA MASIVA RESTAURADA
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -23,6 +23,7 @@
 // - NUEVO: SISTEMA DE COMANDOS PRIORITARIOS - "actualizar" y "listagrupos" se ejecutan inmediatamente
 // - OPTIMIZADO: Agenda local solo se carga al inicio y con "actualizar"
 // - OPTIMIZADO: Logs de mensajes mejorados para mejor visibilidad
+// - RESTAURADO: Consulta masiva de grupos (UNA SOLA LLAMADA a WhatsApp)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -419,7 +420,6 @@ let agendaEnMemoria = null;
 // ============================================
 function cargarAgendaLocal() {
     try {
-        // Si ya está en memoria, devolverla directamente
         if (agendaEnMemoria) {
             return agendaEnMemoria;
         }
@@ -436,7 +436,6 @@ function cargarAgendaLocal() {
             CONFIG.tiempo_entre_mensajes_max = agenda.config.max || 5;
         }
         
-        // Guardar en memoria
         agendaEnMemoria = agenda;
         console.log(`📋 Agenda cargada (${agenda.grupos?.length || 0} grupos)`);
         return agendaEnMemoria;
@@ -456,7 +455,7 @@ function recargarAgenda() {
 }
 
 // ============================================
-// ACTUALIZAR AGENDA (AHORA RECARGA LA MEMORIA)
+// ACTUALIZAR AGENDA
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
@@ -475,7 +474,6 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
         }
         
         if (guardarAgendaLocal(data)) {
-            // Recargar la agenda en memoria
             recargarAgenda();
             const total = data.grupos?.length || 0;
             const pestanas = data.pestanas?.length || 0;
@@ -498,18 +496,16 @@ function guardarLogLocal(texto) {
     const hora = new Date().toLocaleTimeString();
     const linea = `[${hora}] ${texto}`;
     
-    // Guardar en archivo
     fs.appendFileSync(logFile, linea + '\n');
     
-    // Mostrar en consola con colores para mejor visibilidad
     if (texto.includes('📩 Mensaje recibido')) {
-        console.log('\x1b[32m%s\x1b[0m', `📩 ${texto}`); // Verde para mensajes
+        console.log('\x1b[32m%s\x1b[0m', `📩 ${texto}`);
     } else if (texto.includes('⚡ PRIORITARIO')) {
-        console.log('\x1b[33m%s\x1b[0m', `⚡ ${texto}`); // Amarillo para prioritarios
+        console.log('\x1b[33m%s\x1b[0m', `⚡ ${texto}`);
     } else if (texto.includes('✅') || texto.includes('✔️')) {
-        console.log('\x1b[36m%s\x1b[0m', `✅ ${texto}`); // Cyan para éxitos
+        console.log('\x1b[36m%s\x1b[0m', `✅ ${texto}`);
     } else if (texto.includes('❌') || texto.includes('⚠️')) {
-        console.log('\x1b[31m%s\x1b[0m', `❌ ${texto}`); // Rojo para errores
+        console.log('\x1b[31m%s\x1b[0m', `❌ ${texto}`);
     } else {
         console.log(`📝 ${texto}`);
     }
@@ -705,11 +701,10 @@ function obtenerDelayAleatorio() {
 }
 
 // ============================================
-// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA (AHORA USA MEMORIA)
+// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA
 // ============================================
 async function verificarMensajesLocales(sock) {
     try {
-        // Usar la agenda en memoria (no recargar de disco)
         const agenda = agendaEnMemoria || cargarAgendaLocal();
         
         if (!agenda.grupos || agenda.grupos.length === 0) {
@@ -817,11 +812,95 @@ async function obtenerGruposConEspera(sock) {
 }
 
 // ============================================
-// FUNCIÓN PRINCIPAL: Obtener grupos desde Data Store (CON CACHÉ)
+// NUEVA FUNCIÓN: Consulta masiva de grupos (UNA SOLA VEZ)
+// ============================================
+async function obtenerTodosLosGruposWhatsApp(sock) {
+    try {
+        guardarLogLocal('🔍 Ejecutando consulta MASIVA de grupos (UNA SOLA VEZ)...');
+        
+        // Verificar si la función existe
+        if (typeof sock.groupFetchAllParticipatingGroups !== 'function') {
+            guardarLogLocal('⚠️ Función no disponible, usando método alternativo');
+            return null;
+        }
+        
+        // UNA SOLA CONSULTA para obtener TODOS los grupos
+        const gruposDict = await sock.groupFetchAllParticipatingGroups();
+        
+        if (!gruposDict || typeof gruposDict !== 'object') {
+            guardarLogLocal('⚠️ No se obtuvieron grupos');
+            return null;
+        }
+        
+        // Convertir a array
+        const gruposArray = Object.entries(gruposDict).map(([id, info]) => ({
+            id: id,
+            info: info
+        }));
+        
+        guardarLogLocal(`✅ Consulta masiva exitosa: ${gruposArray.length} grupos obtenidos en UNA SOLA LLAMADA`);
+        return gruposArray;
+        
+    } catch (error) {
+        guardarLogLocal(`❌ Error en consulta masiva: ${error.message}`);
+        return null;
+    }
+}
+
+// ============================================
+// FUNCIÓN PRINCIPAL MODIFICADA: Obtener grupos (USA CONSULTA MASIVA)
 // ============================================
 async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     try {
-        guardarLogLocal('🔍 Obteniendo grupos desde Data Store...');
+        guardarLogLocal('🔍 Obteniendo grupos...');
+        
+        // PASO 1: Intentar consulta masiva (UNA SOLA VEZ)
+        const gruposMasivos = await obtenerTodosLosGruposWhatsApp(sock);
+        
+        // PASO 2: Si la consulta masiva funciona, procesar todo de una vez
+        if (gruposMasivos && gruposMasivos.length > 0) {
+            guardarLogLocal(`   Procesando ${gruposMasivos.length} grupos desde consulta masiva...`);
+            
+            const listaGrupos = [];
+            
+            for (const grupo of gruposMasivos) {
+                let nombreGrupo = 'Sin nombre';
+                const info = grupo.info;
+                
+                // Buscar nombre en diferentes campos
+                if (info.name && info.name !== 'Sin nombre' && info.name.trim() !== '') {
+                    nombreGrupo = info.name;
+                }
+                else if (info.subject && info.subject !== 'Sin nombre' && info.subject.trim() !== '') {
+                    nombreGrupo = info.subject;
+                }
+                else if (info.metadata && info.metadata.subject) {
+                    nombreGrupo = info.metadata.subject;
+                }
+                else if (info.metadata && info.metadata.name) {
+                    nombreGrupo = info.metadata.name;
+                }
+                else if (info.title) {
+                    nombreGrupo = info.title;
+                }
+                
+                // Guardar en caché para futuras consultas
+                if (!groupCache.has(grupo.id)) {
+                    groupCache.set(grupo.id, info);
+                }
+                
+                listaGrupos.push({
+                    id: grupo.id,
+                    nombre: nombreGrupo
+                });
+            }
+            
+            guardarLogLocal(`✅ ${listaGrupos.length} grupos procesados desde consulta masiva`);
+            return listaGrupos;
+        }
+        
+        // PASO 3: Si la consulta masiva falla, usar el método antiguo (grupo por grupo)
+        guardarLogLocal('⚠️ Usando método alternativo (grupo por grupo)...');
         
         let gruposIdsAdicionales = [];
         if (usarEspera) {
@@ -930,73 +1009,6 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN SEPARADA: Consulta masiva de grupos (sin modificar la existente)
-// ============================================
-async function consultaMasivaGrupos(sock) {
-    try {
-        guardarLogLocal('🔍 Ejecutando consulta masiva de grupos (función separada)...');
-        
-        // Verificar si la función existe en esta versión de Baileys
-        if (typeof sock.groupFetchAllParticipatingGroups !== 'function') {
-            guardarLogLocal('⚠️ La función groupFetchAllParticipatingGroups no está disponible en esta versión');
-            guardarLogLocal('   Usando método alternativo (store + eventos)');
-            return await obtenerGruposDesdeStore(sock, true);
-        }
-        
-        // Intentar consulta masiva
-        const gruposDict = await sock.groupFetchAllParticipatingGroups();
-        
-        if (!gruposDict || typeof gruposDict !== 'object') {
-            guardarLogLocal('⚠️ No se obtuvieron grupos en consulta masiva');
-            return await obtenerGruposDesdeStore(sock, true);
-        }
-        
-        // Convertir a array
-        const gruposArray = Object.entries(gruposDict).map(([id, info]) => ({
-            id: id,
-            info: info
-        }));
-        
-        guardarLogLocal(`✅ Consulta masiva exitosa: ${gruposArray.length} grupos`);
-        
-        // Procesar nombres
-        const listaGrupos = [];
-        for (const grupo of gruposArray) {
-            let nombreGrupo = 'Sin nombre';
-            const info = grupo.info;
-            
-            if (info.name && info.name !== 'Sin nombre' && info.name.trim() !== '') {
-                nombreGrupo = info.name;
-            }
-            else if (info.subject && info.subject !== 'Sin nombre' && info.subject.trim() !== '') {
-                nombreGrupo = info.subject;
-            }
-            else if (info.metadata && info.metadata.subject) {
-                nombreGrupo = info.metadata.subject;
-            }
-            else if (info.metadata && info.metadata.name) {
-                nombreGrupo = info.metadata.name;
-            }
-            else if (info.title) {
-                nombreGrupo = info.title;
-            }
-            
-            listaGrupos.push({
-                id: grupo.id,
-                nombre: nombreGrupo
-            });
-        }
-        
-        return listaGrupos;
-        
-    } catch (error) {
-        guardarLogLocal(`❌ Error en consulta masiva: ${error.message}`);
-        guardarLogLocal('   Usando método alternativo (store + eventos)');
-        return await obtenerGruposDesdeStore(sock, true);
-    }
-}
-
-// ============================================
 // FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
 // ============================================
 async function sincronizarGruposConSheets(sock, url_sheets) {
@@ -1085,10 +1097,8 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 // SISTEMA DE COMANDOS PRIORITARIOS
 // ============================================
 
-// Variable para marcar cuando se está procesando un comando prioritario
 let procesandoComandoPrioritario = false;
 
-// Función para procesar comandos prioritarios INMEDIATAMENTE
 async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
     try {
         procesandoComandoPrioritario = true;
@@ -1125,7 +1135,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
             confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
             confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
             confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-            confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
+            confirmacion += `📚 Fuente: Consulta MASIVA (UNA SOLA LLAMADA)`;
             
             await sock.sendMessage(remitente, { text: confirmacion });
         }
@@ -1140,11 +1150,11 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (CON MEMORIA OPTIMIZADA)
+// INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 38.0 (OPTIMIZADO)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 39.0 (CONSULTA MASIVA RESTAURADA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1159,6 +1169,7 @@ async function iniciarWhatsApp() {
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
     console.log('⚡⚡ NUEVO: SISTEMA DE COMANDOS PRIORITARIOS');
     console.log('   - "actualizar" y "listagrupos" se procesan INMEDIATAMENTE');
+    console.log('🔄 RESTAURADO: Consulta masiva de grupos (UNA SOLA LLAMADA)');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1250,7 +1261,6 @@ async function iniciarWhatsApp() {
                 
                 limpiarStoreAntiguo();
                 
-                // Cargar agenda en memoria al conectar
                 const agenda = cargarAgendaLocal();
                 if (agenda.grupos.length === 0) {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
@@ -1286,7 +1296,6 @@ async function iniciarWhatsApp() {
             const expresionCron = `${minutos} ${horas} * * *`;
             
             cron.schedule(expresionCron, async () => {
-                // Si hay un comando prioritario en ejecución, posponer la sincronización
                 if (procesandoComandoPrioritario) {
                     guardarLogLocal(`⏰ Sincronización pospuesta (comando prioritario en ejecución)`);
                     return;
@@ -1301,7 +1310,6 @@ async function iniciarWhatsApp() {
             const expresionCron = `${minutos} ${horas} * * *`;
             
             cron.schedule(expresionCron, async () => {
-                // Si hay un comando prioritario en ejecución, posponer la actualización
                 if (procesandoComandoPrioritario) {
                     guardarLogLocal(`⏰ Actualización pospuesta (comando prioritario en ejecución)`);
                     return;
@@ -1312,7 +1320,6 @@ async function iniciarWhatsApp() {
         });
 
         cron.schedule('* * * * *', async () => {
-            // Si hay un comando prioritario en ejecución, no verificar mensajes locales
             if (procesandoComandoPrioritario) {
                 return;
             }
@@ -1320,14 +1327,11 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // EVENTO DE MENSAJES - CON PRIORIDAD PARA COMANDOS Y LOGS MEJORADOS
+        // EVENTO DE MENSAJES
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
-            // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
-            
             const mensaje = m.messages[0];
             
-            // Verificar que sea un mensaje válido y no sea del propio bot
             if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {
                 return;
             }
@@ -1336,41 +1340,27 @@ async function iniciarWhatsApp() {
             const texto = mensaje.message.conversation || 
                          mensaje.message.extendedTextMessage?.text || '';
             
-            // Ignorar mensajes vacíos
             if (!texto || texto.trim() === '') {
                 return;
             }
-
-            // ============================================
-            // FILTRO DE TIMESTAMP ELIMINADO
-            // ============================================
             
-            // Solo responder a mensajes PRIVADOS
             if (remitente && !remitente.includes('@g.us') && texto) {
                 const cmd = texto.toLowerCase().trim();
                 
-                // Mostrar el mensaje recibido de forma CLARA y VISIBLE
                 console.log('\n═══════════════════════════════════════════════');
                 console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${cmd}"`);
                 console.log('═══════════════════════════════════════════════\n');
                 
-                // También guardar en log local
                 guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
                 
-                // ============================================
-                // COMANDOS PRIORITARIOS - Se ejecutan INMEDIATAMENTE
-                // ============================================
                 if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
-                    // Usar setImmediate para saltar la cola de eventos
                     setImmediate(() => {
                         procesarComandoPrioritario(sock, cmd, remitente, url_sheets);
                     });
-                    return; // Salir inmediatamente, no procesar más
+                    return;
                 }
                 
-                // Comandos no prioritarios (status)
                 else if (cmd === 'status' || cmd === 'estado') {
-                    // Si hay un comando prioritario ejecutándose, esperar
                     if (procesandoComandoPrioritario) {
                         guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
                         setTimeout(async () => {
@@ -1396,6 +1386,7 @@ async function iniciarWhatsApp() {
                                           `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                           `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
                                           `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                          `🔄 Consulta masiva: RESTAURADA\n` +
                                           `🗑️  Limpieza automática: activada\n` +
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
@@ -1426,6 +1417,7 @@ async function iniciarWhatsApp() {
                                       `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                       `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
                                       `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                      `🔄 Consulta masiva: RESTAURADA\n` +
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
