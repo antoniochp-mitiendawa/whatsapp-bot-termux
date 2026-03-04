@@ -1,8 +1,8 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
 // Versión: 39.0 - CONSULTA MASIVA RESTAURADA
-// + MEJORA: Keep-Alive cada 25 segundos
-// + MEJORA: Ignorar mensajes de grupos
+// + MEJORA 1: Keep-Alive cada 25 segundos
+// + MEJORA 2: Ignorar mensajes de grupos
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1153,11 +1153,6 @@ async function iniciarWhatsApp() {
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
-    // ============================================
-    // MEJORAS AÑADIDAS (solo mensajes visuales)
-    // ============================================
-    console.log('✅ MEJORA: Keep-Alive cada 25 segundos (conexión siempre activa)');
-    console.log('✅ MEJORA: Ignora completamente mensajes de grupos\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1184,7 +1179,7 @@ async function iniciarWhatsApp() {
         }
 
         // ============================================
-        // CONFIGURACIÓN DEL SOCKET CON KEEP-ALIVE (AÑADIDO)
+        // CONFIGURACIÓN DEL SOCKET
         // ============================================
         const sock = makeWASocket({
             version,
@@ -1198,7 +1193,7 @@ async function iniciarWhatsApp() {
             shouldSyncHistoryMessage: () => false,
             generateHighQualityLinkPreview: true,
             cachedGroupMetadata: async (jid) => groupCache.get(jid),
-            // >>> LÍNEA AÑADIDA: Keep-Alive cada 25 segundos <<<
+            // >>> MEJORA 1: Keep-Alive cada 25 segundos <<<
             keepAliveIntervalMs: 25000
         });
 
@@ -1316,7 +1311,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // EVENTO DE MENSAJES CON FILTRO DE GRUPOS (AÑADIDO)
+        // EVENTO DE MENSAJES
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
@@ -1327,12 +1322,11 @@ async function iniciarWhatsApp() {
 
             const remitente = mensaje.key.remoteJid;
 
-            // >>> BLOQUE AÑADIDO: Ignorar mensajes de grupos <<<
-            // Verificamos si el mensaje viene de un grupo y salimos inmediatamente
+            // >>> MEJORA 2: Ignorar mensajes de grupos completamente <<<
             if (remitente && remitente.includes('@g.us')) {
-                return; // No procesamos nada de grupos
+                return; // No procesar mensajes de grupos
             }
-            // >>> FIN BLOQUE AÑADIDO <<<
+            // >>> FIN MEJORA 2 <<<
 
             const texto = mensaje.message.conversation || 
                          mensaje.message.extendedTextMessage?.text || '';
