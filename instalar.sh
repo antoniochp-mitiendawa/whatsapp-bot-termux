@@ -1,34 +1,16 @@
 #!/bin/bash
 
 echo "===================================="
-echo "🚀 INSTALADOR WHATSAPP BOT - V2.0"
+echo "🚀 INSTALADOR WHATSAPP BOT"
 echo "===================================="
-echo ""
-echo "🔧 PASO 0: Reparando posibles errores de Termux..."
-echo ""
-
-# Reparar posibles errores de librerías
-echo "   → Configurando repositorios..."
-termux-change-repo << EOF
-1
-EOF
-
-echo "   → Actualizando paquetes..."
-pkg update -y && pkg upgrade -y
-
-echo "   → Instalando librería faltante (libandroid-posix-semaphore)..."
-pkg install libandroid-posix-semaphore -y
-
-echo ""
-echo "✅ Reparación completada"
 echo ""
 
 # PASO 1: Instalar lo básico
 echo " PASO 1: Instalando programas necesarios..."
+pkg update -y
 pkg install git -y
 pkg install nodejs -y
 pkg install yarn -y
-pkg install wget -y
 
 # PASO 2: Clonar el repositorio
 echo " PASO 2: Descargando el bot..."
@@ -50,11 +32,13 @@ echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
 
-# PASO 4: Instalar dependencias
+# PASO 4: Instalar dependencias (AQUÍ ESTÁ EL CAMBIO)
 echo ""
 echo " PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
+
+# --- Librerías normales ---
 npm install @whiskeysockets/baileys
 npm install @hapi/boom
 npm install qrcode-terminal
@@ -62,8 +46,9 @@ npm install node-cron
 npm install axios
 npm install pino
 npm install link-preview-js
+
+# --- NUEVA LIBRERÍA: Para el Data Store ---
 npm install @rodrigogs/baileys-store
-npm install crypto
 
 echo ""
 echo "===================================="
