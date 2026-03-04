@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 35.0 - ESTADOS EN SEGUNDO PLANO
+// Versión: 36.0 - COMANDOS PRIORITARIOS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -21,7 +21,7 @@
 // - Logs solo locales
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
-// - NUEVO: Publicación en segundo plano con cron cada minuto
+// - NUEVO: SISTEMA DE COMANDOS PRIORITARIOS - "actualizar" y "listagrupos" se ejecutan inmediatamente
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1264,28 +1264,58 @@ function marcarHistoriaPublicada(nombreArchivo) {
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Publicar historia (SIMPLE - UNA SOLA VEZ)
-// ============================================
+// --- Función para publicar una historia (estado) ---
 async function publicarHistoria(sock, archivoInfo) {
     try {
         const buffer = fs.readFileSync(archivoInfo.ruta);
         const emoji = obtenerEmojiParaHistoria(archivoInfo.nombreSinExtension, archivoInfo.extension);
         const texto = `${emoji} ${archivoInfo.nombreSinExtension}`;
         
-        guardarLogLocal(`   📤 Enviando estado: ${archivoInfo.nombre}`);
+        guardarLogLocal(`   📤 Publicando historia: ${archivoInfo.nombre}`);
         
-        // UNA SOLA PETICIÓN - SIN REINTENTOS - SIN COMPLICACIONES
-        await sock.sendMessage('status@broadcast', {
-            image: buffer,
-            caption: texto
-        });
+        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(archivoInfo.extension)) {
+            await sock.sendMessage('status@broadcast', {
+                image: buffer,
+                caption: texto,
+                backgroundColor: '#000000',
+                font: 1,
+                statusJidList: [],
+                broadcast: true
+            });
+            return 'HISTORIA IMAGEN PUBLICADA';
+        }
+        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(archivoInfo.extension)) {
+            await sock.sendMessage('status@broadcast', {
+                video: buffer,
+                caption: texto,
+                backgroundColor: '#000000',
+                font: 1,
+                statusJidList: [],
+                broadcast: true
+            });
+            return 'HISTORIA VIDEO PUBLICADA';
+        }
+        else if (['.mp3', '.ogg', '.m4a', '.wav'].includes(archivoInfo.extension)) {
+            let mimetype = 'audio/mpeg';
+            if (archivoInfo.extension === '.ogg') mimetype = 'audio/ogg';
+            if (archivoInfo.extension === '.m4a') mimetype = 'audio/mp4';
+            if (archivoInfo.extension === '.wav') mimetype = 'audio/wav';
+            
+            await sock.sendMessage('status@broadcast', {
+                audio: buffer,
+                mimetype: mimetype,
+                backgroundColor: '#000000',
+                font: 1,
+                statusJidList: [],
+                broadcast: true
+            });
+            return 'HISTORIA AUDIO PUBLICADA';
+        }
         
-        guardarLogLocal(`   ✅ Estado enviado correctamente en segundo plano`);
-        return 'HISTORIA PUBLICADA';
+        return 'ERROR: Formato no soportado';
         
     } catch (error) {
-        guardarLogLocal(`   ❌ Error: ${error.message}`);
+        guardarLogLocal(`   ❌ Error publicando historia: ${error.message}`);
         return 'ERROR: ' + error.message.substring(0, 50);
     }
 }
@@ -1355,11 +1385,11 @@ async function procesarHistorias(sock) {
             return;
         }
         
-        guardarLogLocal(`📢 Procesando historia: ${siguiente.nombre}`);
+        guardarLogLocal(`📢 Publicando historia: ${siguiente.nombre}`);
         
         const resultado = await publicarHistoria(sock, siguiente);
         
-        if (resultado === 'HISTORIA PUBLICADA') {
+        if (resultado.startsWith('HISTORIA')) {
             marcarHistoriaPublicada(siguiente.nombre);
         }
         
@@ -1371,11 +1401,71 @@ async function procesarHistorias(sock) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (CON ESTADOS EN SEGUNDO PLANO)
+// ============================================
+// NUEVO SISTEMA DE COMANDOS PRIORITARIOS
+// ============================================
+// ============================================
+
+// Variable para marcar cuando se está procesando un comando prioritario
+let procesandoComandoPrioritario = false;
+
+// Función para procesar comandos prioritarios INMEDIATAMENTE
+async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
+    try {
+        procesandoComandoPrioritario = true;
+        guardarLogLocal(`   ⚡ PRIORITARIO: Procesando comando "${cmd}" inmediatamente`);
+        
+        if (cmd === 'actualizar' || cmd === 'update') {
+            guardarLogLocal(`   Procesando comando prioritario: actualizar`);
+            const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
+            if (resultado) {
+                await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
+            } else {
+                await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
+            }
+        }
+        
+        else if (cmd === 'listagrupos' || cmd === 'grupos') {
+            guardarLogLocal(`   Procesando comando prioritario: listagrupos`);
+            
+            await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (prioritario)...' });
+            
+            const grupos = await obtenerGruposDesdeStore(sock, true);
+            
+            if (grupos.length === 0) {
+                await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
+                procesandoComandoPrioritario = false;
+                return;
+            }
+            
+            const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
+            
+            const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
+            
+            let confirmacion = '✅ *PROCESO COMPLETADO (PRIORITARIO)*\n\n';
+            confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
+            confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
+            confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
+            confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
+            
+            await sock.sendMessage(remitente, { text: confirmacion });
+        }
+        
+        guardarLogLocal(`   ✅ Comando prioritario completado`);
+        procesandoComandoPrioritario = false;
+        
+    } catch (error) {
+        guardarLogLocal(`   ❌ Error en comando prioritario: ${error.message}`);
+        procesandoComandoPrioritario = false;
+    }
+}
+
+// ============================================
+// INICIAR CONEXIÓN WHATSAPP (CON COMANDOS PRIORITARIOS)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 35.0 (ESTADOS EN SEGUNDO PLANO)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 36.0 (COMANDOS PRIORITARIOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1390,7 +1480,8 @@ async function iniciarWhatsApp() {
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
     console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
     console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
-    console.log('🔄 NUEVO: Publicación en segundo plano (cron cada minuto)');
+    console.log('⚡⚡ NUEVO: SISTEMA DE COMANDOS PRIORITARIOS');
+    console.log('   - "actualizar" y "listagrupos" se procesan INMEDIATAMENTE');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1523,6 +1614,11 @@ async function iniciarWhatsApp() {
             const expresionCron = `${minutos} ${horas} * * *`;
             
             cron.schedule(expresionCron, async () => {
+                // Si hay un comando prioritario en ejecución, posponer la sincronización
+                if (procesandoComandoPrioritario) {
+                    guardarLogLocal(`⏰ Sincronización pospuesta (comando prioritario en ejecución)`);
+                    return;
+                }
                 guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
                 await sincronizarGruposConSheets(sock, url_sheets);
             });
@@ -1533,24 +1629,37 @@ async function iniciarWhatsApp() {
             const expresionCron = `${minutos} ${horas} * * *`;
             
             cron.schedule(expresionCron, async () => {
+                // Si hay un comando prioritario en ejecución, posponer la actualización
+                if (procesandoComandoPrioritario) {
+                    guardarLogLocal(`⏰ Actualización pospuesta (comando prioritario en ejecución)`);
+                    return;
+                }
                 guardarLogLocal(`⏰ Actualización programada de agenda (${hora})`);
                 await actualizarAgenda(sock, url_sheets, 'programado');
             });
         });
 
         cron.schedule('* * * * *', async () => {
+            // Si hay un comando prioritario en ejecución, no verificar mensajes locales
+            if (procesandoComandoPrioritario) {
+                return;
+            }
             await verificarMensajesLocales(sock);
         });
 
         // ============================================
-        // NUEVO: Cron para historias (cada minuto - SEGUNDO PLANO)
+        // NUEVO: Cron para historias (cada minuto)
         // ============================================
         cron.schedule('* * * * *', async () => {
+            // Si hay un comando prioritario en ejecución, no procesar historias
+            if (procesandoComandoPrioritario) {
+                return;
+            }
             await procesarHistorias(sock);
         });
 
         // ============================================
-        // EVENTO DE MENSAJES - SIN FILTRO DE TIPO
+        // EVENTO DE MENSAJES - CON PRIORIDAD PARA COMANDOS
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
@@ -1580,92 +1689,104 @@ async function iniciarWhatsApp() {
                 const cmd = texto.toLowerCase().trim();
                 guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
                 
-                if (cmd === 'actualizar' || cmd === 'update') {
-                    guardarLogLocal(`   Procesando comando: actualizar`);
-                    const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
-                    if (resultado) {
-                        await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
-                    } else {
-                        await sock.sendMessage(remitente, { text: '❌ Error al actualizar agenda' });
-                    }
+                // ============================================
+                // COMANDOS PRIORITARIOS - Se ejecutan INMEDIATAMENTE
+                // ============================================
+                if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
+                    // Usar setImmediate para saltar la cola de eventos
+                    setImmediate(() => {
+                        procesarComandoPrioritario(sock, cmd, remitente, url_sheets);
+                    });
+                    return; // Salir inmediatamente, no procesar más
                 }
                 
+                // Comandos no prioritarios (status)
                 else if (cmd === 'status' || cmd === 'estado') {
-                    guardarLogLocal(`   Procesando comando: status`);
-                    const agenda = cargarAgendaLocal();
-                    const total = agenda.grupos?.length || 0;
-                    const pestanas = Object.keys(agenda.pestanas || {}).length;
-                    const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                    
-                    // ============================================
-                    // NUEVO: Información de historias en status
-                    // ============================================
-                    const progreso = cargarProgresoHistorias();
-                    const archivosEnCarpeta = escanearCarpetaHistorias().length;
-                    
-                    let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
-                                  `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                                  `📋 Grupos totales: ${total}\n` +
-                                  `✅ Grupos activos: ${activos}\n` +
-                                  `📌 Pestañas: ${pestanas}\n` +
-                                  `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
-                                  `✍️  Typing adaptativo: activado\n` +
-                                  `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                  `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                  `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                  `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                  `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                  `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
-                                  `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                  `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
-                                  // ============================================
-                                  // NUEVO: Información de historias en status
-                                  // ============================================
-                                  `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
-                                  `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
-                                  `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
-                                  `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
-                                  `🔄  Segundo plano: ACTIVADO (cron cada minuto)\n` +
-                                  `🗑️  Limpieza automática: activada\n` +
-                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                  `📤 Comando listagrupos: disponible (con caché)\n` +
-                                  `⏰ Próxima actualización: 6am/6pm`;
-                    
-                    await sock.sendMessage(remitente, { text: mensaje });
-                }
-                
-                else if (cmd === 'listagrupos' || cmd === 'grupos') {
-                    guardarLogLocal(`   Procesando comando: listagrupos`);
-                    
-                    await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (espera 30 segundos para capturar TODOS)...' });
-                    
-                    // Usar la función original que ya funciona
-                    const grupos = await obtenerGruposDesdeStore(sock, true);
-                    
-                    if (grupos.length === 0) {
-                        await sock.sendMessage(remitente, { text: '❌ No se encontraron grupos.' });
-                        return;
+                    // Si hay un comando prioritario ejecutándose, esperar
+                    if (procesandoComandoPrioritario) {
+                        guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
+                        setTimeout(async () => {
+                            guardarLogLocal(`   Procesando comando: status (diferido)`);
+                            const agenda = cargarAgendaLocal();
+                            const total = agenda.grupos?.length || 0;
+                            const pestanas = Object.keys(agenda.pestanas || {}).length;
+                            const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                            
+                            const progreso = cargarProgresoHistorias();
+                            const archivosEnCarpeta = escanearCarpetaHistorias().length;
+                            
+                            let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                          `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                          `📋 Grupos totales: ${total}\n` +
+                                          `✅ Grupos activos: ${activos}\n` +
+                                          `📌 Pestañas: ${pestanas}\n` +
+                                          `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                          `✍️  Typing adaptativo: activado\n` +
+                                          `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                          `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                          `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                          `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                          `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                          `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                          `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                          `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                          `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
+                                          `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
+                                          `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
+                                          `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
+                                          `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                          `🗑️  Limpieza automática: activada\n` +
+                                          `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                          `📤 Comando listagrupos: disponible (con caché)\n` +
+                                          `⏰ Próxima actualización: 6am/6pm`;
+                            
+                            await sock.sendMessage(remitente, { text: mensaje });
+                        }, 1000);
+                    } else {
+                        guardarLogLocal(`   Procesando comando: status`);
+                        const agenda = cargarAgendaLocal();
+                        const total = agenda.grupos?.length || 0;
+                        const pestanas = Object.keys(agenda.pestanas || {}).length;
+                        const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                        
+                        const progreso = cargarProgresoHistorias();
+                        const archivosEnCarpeta = escanearCarpetaHistorias().length;
+                        
+                        let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                      `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                      `📋 Grupos totales: ${total}\n` +
+                                      `✅ Grupos activos: ${activos}\n` +
+                                      `📌 Pestañas: ${pestanas}\n` +
+                                      `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                      `✍️  Typing adaptativo: activado\n` +
+                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                      `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                      `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                      `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                      `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                      `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                      `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                      `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                      `📅  Config Historias: ${CONFIG.horario_historias} (${CONFIG.dias_historias}) intervalo ${CONFIG.intervalo_historias_min}-${CONFIG.intervalo_historias_max} min\n` +
+                                      `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
+                                      `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
+                                      `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
+                                      `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                      `🗑️  Limpieza automática: activada\n` +
+                                      `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                      `📤 Comando listagrupos: disponible (con caché)\n` +
+                                      `⏰ Próxima actualización: 6am/6pm`;
+                        
+                        await sock.sendMessage(remitente, { text: mensaje });
                     }
-                    
-                    const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
-                    
-                    const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
-                    
-                    let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
-                    confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
-                    confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
-                    confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-                    confirmacion += `📚 Fuente: Data Store local + eventos (30s espera)`;
-                    
-                    await sock.sendMessage(remitente, { text: confirmacion });
                 }
             }
         });
 
         console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - Forzar descarga de agenda');
+        console.log('   - "actualizar" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
+        console.log('   - "listagrupos" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
         console.log('   - "status" - Ver estado del bot (incluye info de Historias)');
-        console.log('   - "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
         console.log('   - Presiona CTRL+C para salir\n');
 
     } catch (error) {
