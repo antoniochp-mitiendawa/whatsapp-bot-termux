@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 37.0 - SIN HISTORIAS
+// Versión: 38.0 - OPTIMIZADO (agenda local mejorada)
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -21,7 +21,8 @@
 // - Logs solo locales
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVO: SISTEMA DE COMANDOS PRIORITARIOS - "actualizar" y "listagrupos" se ejecutan inmediatamente
-// - HISTORIAS: ELIMINADAS COMPLETAMENTE (para estabilidad)
+// - OPTIMIZADO: Agenda local solo se carga al inicio y con "actualizar"
+// - OPTIMIZADO: Logs de mensajes mejorados para mejor visibilidad
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -57,9 +58,6 @@ const CONFIG = {
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
     tiempo_espera_grupos: 30000
-    // ============================================
-    // PARÁMETROS DE HISTORIAS ELIMINADOS
-    // ============================================
 };
 
 // Crear carpetas necesarias
@@ -80,9 +78,6 @@ if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
         console.error('❌ Error creando carpeta multimedia:', error.message);
     }
 }
-// ============================================
-// CARPETA DE HISTORIAS ELIMINADA (NO SE CREA)
-// ============================================
 
 // ============================================
 // INICIALIZAR DATA STORE
@@ -363,10 +358,6 @@ async function consultarTodosLosGrupos(url) {
                 CONFIG.tiempo_entre_mensajes_max = valor;
                 console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (convertido desde valor único)`);
             }
-            
-            // ============================================
-            // PARÁMETROS DE HISTORIAS ELIMINADOS (no se leen)
-            // ============================================
         }
         
         return data;
@@ -408,8 +399,7 @@ function guardarAgendaLocal(data) {
         
         console.log(`✅ Agenda guardada localmente (${grupos.length} grupos en ${Object.keys(agenda.pestanas).length} pestañas)`);
         Object.keys(agenda.pestanas).forEach(pestana => {
-            const p = agenda.pestanas[pestana];
-            console.log(`   📌 ${pestana}: ${p.grupos.length} grupos - Horario: ${p.horario || 'N/A'}`);
+            console.log(`   📌 ${pestana}: ${agenda.pestanas[pestana].grupos.length} grupos - Horario: ${agenda.pestanas[pestana].horario || 'N/A'}`);
         });
         
         return true;
@@ -420,13 +410,24 @@ function guardarAgendaLocal(data) {
 }
 
 // ============================================
-// CARGAR AGENDA LOCAL
+// VARIABLE PARA ALMACENAR LA AGENDA EN MEMORIA
+// ============================================
+let agendaEnMemoria = null;
+
+// ============================================
+// CARGAR AGENDA LOCAL (SOLO UNA VEZ Y CUANDO SEA NECESARIO)
 // ============================================
 function cargarAgendaLocal() {
     try {
+        // Si ya está en memoria, devolverla directamente
+        if (agendaEnMemoria) {
+            return agendaEnMemoria;
+        }
+        
         if (!fs.existsSync(CONFIG.archivo_agenda)) {
             console.log('📁 No hay agenda local (primera vez)');
-            return { grupos: [], pestanas: {}, total: 0 };
+            agendaEnMemoria = { grupos: [], pestanas: {}, total: 0 };
+            return agendaEnMemoria;
         }
         const agenda = JSON.parse(fs.readFileSync(CONFIG.archivo_agenda, 'utf8'));
         
@@ -435,16 +436,27 @@ function cargarAgendaLocal() {
             CONFIG.tiempo_entre_mensajes_max = agenda.config.max || 5;
         }
         
+        // Guardar en memoria
+        agendaEnMemoria = agenda;
         console.log(`📋 Agenda cargada (${agenda.grupos?.length || 0} grupos)`);
-        return agenda;
+        return agendaEnMemoria;
     } catch (error) {
         console.error('❌ Error cargando agenda:', error.message);
-        return { grupos: [], pestanas: {}, total: 0 };
+        agendaEnMemoria = { grupos: [], pestanas: {}, total: 0 };
+        return agendaEnMemoria;
     }
 }
 
 // ============================================
-// ACTUALIZAR AGENDA
+// FORZAR RECARGA DE AGENDA (para el comando actualizar)
+// ============================================
+function recargarAgenda() {
+    agendaEnMemoria = null;
+    return cargarAgendaLocal();
+}
+
+// ============================================
+// ACTUALIZAR AGENDA (AHORA RECARGA LA MEMORIA)
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
@@ -463,6 +475,8 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
         }
         
         if (guardarAgendaLocal(data)) {
+            // Recargar la agenda en memoria
+            recargarAgenda();
             const total = data.grupos?.length || 0;
             const pestanas = data.pestanas?.length || 0;
             guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en ${pestanas} pestañas`);
@@ -476,14 +490,29 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
 }
 
 // ============================================
-// GUARDAR LOG LOCAL
+// GUARDAR LOG LOCAL (MEJORADO)
 // ============================================
 function guardarLogLocal(texto) {
     const fecha = new Date().toISOString().split('T')[0];
     const logFile = path.join(CONFIG.carpeta_logs, `${fecha}.log`);
     const hora = new Date().toLocaleTimeString();
-    fs.appendFileSync(logFile, `[${hora}] ${texto}\n`);
-    console.log(`📝 ${texto}`);
+    const linea = `[${hora}] ${texto}`;
+    
+    // Guardar en archivo
+    fs.appendFileSync(logFile, linea + '\n');
+    
+    // Mostrar en consola con colores para mejor visibilidad
+    if (texto.includes('📩 Mensaje recibido')) {
+        console.log('\x1b[32m%s\x1b[0m', `📩 ${texto}`); // Verde para mensajes
+    } else if (texto.includes('⚡ PRIORITARIO')) {
+        console.log('\x1b[33m%s\x1b[0m', `⚡ ${texto}`); // Amarillo para prioritarios
+    } else if (texto.includes('✅') || texto.includes('✔️')) {
+        console.log('\x1b[36m%s\x1b[0m', `✅ ${texto}`); // Cyan para éxitos
+    } else if (texto.includes('❌') || texto.includes('⚠️')) {
+        console.log('\x1b[31m%s\x1b[0m', `❌ ${texto}`); // Rojo para errores
+    } else {
+        console.log(`📝 ${texto}`);
+    }
 }
 
 // ============================================
@@ -676,11 +705,12 @@ function obtenerDelayAleatorio() {
 }
 
 // ============================================
-// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA
+// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA (AHORA USA MEMORIA)
 // ============================================
 async function verificarMensajesLocales(sock) {
     try {
-        const agenda = cargarAgendaLocal();
+        // Usar la agenda en memoria (no recargar de disco)
+        const agenda = agendaEnMemoria || cargarAgendaLocal();
         
         if (!agenda.grupos || agenda.grupos.length === 0) {
             return;
@@ -1052,10 +1082,6 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// FUNCIONES DE HISTORIAS ELIMINADAS COMPLETAMENTE
-// ============================================
-
-// ============================================
 // SISTEMA DE COMANDOS PRIORITARIOS
 // ============================================
 
@@ -1114,11 +1140,11 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (SIN HISTORIAS)
+// INICIAR CONEXIÓN WHATSAPP (CON MEMORIA OPTIMIZADA)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 37.0 (SIN HISTORIAS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 38.0 (OPTIMIZADO)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1224,6 +1250,7 @@ async function iniciarWhatsApp() {
                 
                 limpiarStoreAntiguo();
                 
+                // Cargar agenda en memoria al conectar
                 const agenda = cargarAgendaLocal();
                 if (agenda.grupos.length === 0) {
                     guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
@@ -1232,10 +1259,6 @@ async function iniciarWhatsApp() {
                 
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
                 await sincronizarGruposConSheets(sock, url_sheets);
-                
-                // ============================================
-                // INICIALIZACIÓN DE HISTORIAS ELIMINADA
-                // ============================================
             }
 
             if (connection === 'close') {
@@ -1297,11 +1320,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // CRON DE HISTORIAS ELIMINADO
-        // ============================================
-
-        // ============================================
-        // EVENTO DE MENSAJES - CON PRIORIDAD PARA COMANDOS
+        // EVENTO DE MENSAJES - CON PRIORIDAD PARA COMANDOS Y LOGS MEJORADOS
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             // El filtro de tipo ha sido ELIMINADO - procesamos todos los mensajes
@@ -1329,7 +1348,14 @@ async function iniciarWhatsApp() {
             // Solo responder a mensajes PRIVADOS
             if (remitente && !remitente.includes('@g.us') && texto) {
                 const cmd = texto.toLowerCase().trim();
-                guardarLogLocal(`📩 Mensaje recibido de ${remitente.split('@')[0]}: "${cmd}"`);
+                
+                // Mostrar el mensaje recibido de forma CLARA y VISIBLE
+                console.log('\n═══════════════════════════════════════════════');
+                console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${cmd}"`);
+                console.log('═══════════════════════════════════════════════\n');
+                
+                // También guardar en log local
+                guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
                 
                 // ============================================
                 // COMANDOS PRIORITARIOS - Se ejecutan INMEDIATAMENTE
