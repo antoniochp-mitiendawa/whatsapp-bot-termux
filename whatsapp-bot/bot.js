@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 39.0 - CONSULTA MASIVA RESTAURADA
+// Versión: 39.1 - CON KEEP-ALIVE Y FILTRO DE GRUPOS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -24,6 +24,8 @@
 // - OPTIMIZADO: Agenda local solo se carga al inicio y con "actualizar"
 // - OPTIMIZADO: Logs de mensajes mejorados para mejor visibilidad
 // - RESTAURADO: Consulta masiva de grupos (UNA SOLA LLAMADA a WhatsApp)
+// - NUEVO v39.1: Keep-Alive cada 25 segundos para conexión siempre activa
+// - NUEVO v39.1: Ignora completamente mensajes de grupos (solo procesa individuales)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1154,7 +1156,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 39.0 (CONSULTA MASIVA RESTAURADA)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 39.1 (CONSULTA MASIVA + KEEP-ALIVE + FILTRO GRUPOS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1174,6 +1176,8 @@ async function iniciarWhatsApp() {
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
+    console.log('🆕 NUEVO v39.1: Keep-Alive cada 25 segundos para conexión siempre activa');
+    console.log('🆕 NUEVO v39.1: Ignora completamente mensajes de grupos\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1199,6 +1203,9 @@ async function iniciarWhatsApp() {
             console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
         }
 
+        // ============================================
+        // CONFIGURACIÓN DEL SOCKET CON KEEP-ALIVE
+        // ============================================
         const sock = makeWASocket({
             version,
             auth: state,
@@ -1210,7 +1217,9 @@ async function iniciarWhatsApp() {
             defaultQueryTimeoutMs: 60000,
             shouldSyncHistoryMessage: () => false,
             generateHighQualityLinkPreview: true,
-            cachedGroupMetadata: async (jid) => groupCache.get(jid)
+            cachedGroupMetadata: async (jid) => groupCache.get(jid),
+            // >>> NUEVO: Mantener conexión activa (keep-alive cada 25 segundos) <<<
+            keepAliveIntervalMs: 25000
         });
 
         store.bind(sock.ev);
@@ -1327,7 +1336,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // EVENTO DE MENSAJES
+        // EVENTO DE MENSAJES CON FILTRO DE GRUPOS
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
@@ -1337,6 +1346,13 @@ async function iniciarWhatsApp() {
             }
 
             const remitente = mensaje.key.remoteJid;
+            
+            // >>> NUEVO: Ignorar completamente mensajes de grupos <<<
+            // Si el mensaje viene de un grupo, salimos inmediatamente sin procesar nada
+            if (remitente && remitente.includes('@g.us')) {
+                return; // El bot ve el mensaje pero lo ignora al instante
+            }
+            
             const texto = mensaje.message.conversation || 
                          mensaje.message.extendedTextMessage?.text || '';
             
@@ -1344,58 +1360,27 @@ async function iniciarWhatsApp() {
                 return;
             }
             
-            if (remitente && !remitente.includes('@g.us') && texto) {
-                const cmd = texto.toLowerCase().trim();
-                
-                console.log('\n═══════════════════════════════════════════════');
-                console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${cmd}"`);
-                console.log('═══════════════════════════════════════════════\n');
-                
-                guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
-                
-                if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
-                    setImmediate(() => {
-                        procesarComandoPrioritario(sock, cmd, remitente, url_sheets);
-                    });
-                    return;
-                }
-                
-                else if (cmd === 'status' || cmd === 'estado') {
-                    if (procesandoComandoPrioritario) {
-                        guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
-                        setTimeout(async () => {
-                            guardarLogLocal(`   Procesando comando: status (diferido)`);
-                            const agenda = cargarAgendaLocal();
-                            const total = agenda.grupos?.length || 0;
-                            const pestanas = Object.keys(agenda.pestanas || {}).length;
-                            const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                            
-                            let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
-                                          `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                                          `📋 Grupos totales: ${total}\n` +
-                                          `✅ Grupos activos: ${activos}\n` +
-                                          `📌 Pestañas: ${pestanas}\n` +
-                                          `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
-                                          `✍️  Typing adaptativo: activado\n` +
-                                          `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                          `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                          `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
-                                          `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                          `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                          `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
-                                          `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                          `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
-                                          `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
-                                          `🔄 Consulta masiva: RESTAURADA\n` +
-                                          `🗑️  Limpieza automática: activada\n` +
-                                          `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                          `📤 Comando listagrupos: disponible (con caché)\n` +
-                                          `⏰ Próxima actualización: 6am/6pm`;
-                            
-                            await sock.sendMessage(remitente, { text: mensaje });
-                        }, 1000);
-                    } else {
-                        guardarLogLocal(`   Procesando comando: status`);
+            // Aquí solo llegan mensajes de individuos (no grupos)
+            const cmd = texto.toLowerCase().trim();
+            
+            console.log('\n═══════════════════════════════════════════════');
+            console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${cmd}"`);
+            console.log('═══════════════════════════════════════════════\n');
+            
+            guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
+            
+            if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
+                setImmediate(() => {
+                    procesarComandoPrioritario(sock, cmd, remitente, url_sheets);
+                });
+                return;
+            }
+            
+            else if (cmd === 'status' || cmd === 'estado') {
+                if (procesandoComandoPrioritario) {
+                    guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
+                    setTimeout(async () => {
+                        guardarLogLocal(`   Procesando comando: status (diferido)`);
                         const agenda = cargarAgendaLocal();
                         const total = agenda.grupos?.length || 0;
                         const pestanas = Object.keys(agenda.pestanas || {}).length;
@@ -1421,10 +1406,44 @@ async function iniciarWhatsApp() {
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
-                                      `⏰ Próxima actualización: 6am/6pm`;
+                                      `⏰ Próxima actualización: 6am/6pm\n` +
+                                      `🆕 v39.1: Keep-Alive activado (25s)\n` +
+                                      `🆕 v39.1: Ignorando mensajes de grupos`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
-                    }
+                    }, 1000);
+                } else {
+                    guardarLogLocal(`   Procesando comando: status`);
+                    const agenda = cargarAgendaLocal();
+                    const total = agenda.grupos?.length || 0;
+                    const pestanas = Object.keys(agenda.pestanas || {}).length;
+                    const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                    
+                    let mensaje = `📊 *ESTADO DEL BOT*\n\n` +
+                                  `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                  `📋 Grupos totales: ${total}\n` +
+                                  `✅ Grupos activos: ${activos}\n` +
+                                  `📌 Pestañas: ${pestanas}\n` +
+                                  `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                  `✍️  Typing adaptativo: activado\n` +
+                                  `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                  `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                  `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                  `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                  `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                  `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                  `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                  `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                  `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                  `🔄 Consulta masiva: RESTAURADA\n` +
+                                  `🗑️  Limpieza automática: activada\n` +
+                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                  `📤 Comando listagrupos: disponible (con caché)\n` +
+                                  `⏰ Próxima actualización: 6am/6pm\n` +
+                                  `🆕 v39.1: Keep-Alive activado (25s)\n` +
+                                  `🆕 v39.1: Ignorando mensajes de grupos`;
+                    
+                    await sock.sendMessage(remitente, { text: mensaje });
                 }
             }
         });
@@ -1434,6 +1453,7 @@ async function iniciarWhatsApp() {
         console.log('   - "listagrupos" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
+        console.log('🆕 Mejoras v39.1 activadas: Keep-Alive + Ignorar grupos\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
