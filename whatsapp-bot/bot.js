@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 39.1 - CONSULTA MASIVA RESTAURADA + KEEP-ALIVE + FILTRO GRUPOS
+// Versión: 39.0 - CONSULTA MASIVA RESTAURADA
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -24,8 +24,8 @@
 // - OPTIMIZADO: Agenda local solo se carga al inicio y con "actualizar"
 // - OPTIMIZADO: Logs de mensajes mejorados para mejor visibilidad
 // - RESTAURADO: Consulta masiva de grupos (UNA SOLA LLAMADA a WhatsApp)
-// - NUEVO v39.1: Keep-Alive cada 25 segundos para conexión siempre activa
-// - NUEVO v39.1: Ignora completamente mensajes de grupos (solo procesa individuales)
+// - NUEVO: Keep-Alive cada 25 segundos (añadido)
+// - NUEVO: Ignorar mensajes de grupos (añadido en el lugar correcto)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1156,7 +1156,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 39.1 (CONSULTA MASIVA RESTAURADA + KEEP-ALIVE + FILTRO GRUPOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 39.0 (CONSULTA MASIVA RESTAURADA)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1176,8 +1176,8 @@ async function iniciarWhatsApp() {
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
     console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets\n');
-    console.log('🆕 NUEVO v39.1: Keep-Alive cada 25 segundos para conexión siempre activa');
-    console.log('🆕 NUEVO v39.1: Ignora completamente mensajes de grupos\n');
+    console.log('🆕 NUEVO: Keep-Alive cada 25 segundos (conexión siempre activa)');
+    console.log('🆕 NUEVO: Ignora completamente mensajes de grupos\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1335,7 +1335,7 @@ async function iniciarWhatsApp() {
         });
 
         // ============================================
-        // EVENTO DE MENSAJES CON FILTRO DE GRUPOS (NUEVO)
+        // EVENTO DE MENSAJES
         // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
@@ -1347,6 +1347,7 @@ async function iniciarWhatsApp() {
             const remitente = mensaje.key.remoteJid;
 
             // >>> NUEVO: Ignorar mensajes de grupos completamente <<<
+            // (Puesto AQUÍ, después de definir remitente y antes de usarlo)
             if (remitente && remitente.includes('@g.us')) {
                 return; // Sale sin procesar nada si es un grupo
             }
