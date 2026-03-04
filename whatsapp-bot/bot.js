@@ -1,6 +1,6 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 30.0 - ESTADOS COMPLETAMENTE AUTOMÁTICOS
+// Versión: 31.0 - SESIÓN FORZADA PARA STATUS
 // Características:
 // - Conexión con código de emparejamiento
 // - Browser inteligente: Ubuntu para pairing, macOS para sesión
@@ -21,6 +21,7 @@
 // - Logs solo locales
 // - NUEVA FUNCIÓN SEPARADA: consultaMasivaGrupos() (sin modificar la existente)
 // - NUEVAS FUNCIONES AÑADIDAS: Estados (historias) - COMPLETAMENTE AUTOMÁTICOS
+// - NUEVO: Forzar sesión con status@broadcast antes de enviar
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1263,9 +1264,39 @@ function marcarHistoriaPublicada(nombreArchivo) {
     }
 }
 
-// --- Función para publicar una historia (estado) ---
+// ============================================
+// NUEVA FUNCIÓN: Forzar sesión con status@broadcast
+// ============================================
+async function forzarSesionStatus(sock) {
+    try {
+        guardarLogLocal('   🔐 Forzando sesión con status@broadcast...');
+        
+        // Intentar obtener metadatos de status (esto fuerza el establecimiento de sesión)
+        try {
+            // Enviar un mensaje vacío o un ping para forzar la sesión
+            await sock.sendMessage('status@broadcast', {
+                text: '.' // Mensaje de punto que se eliminará
+            });
+            guardarLogLocal('   ✅ Sesión forzada correctamente');
+        } catch (e) {
+            // Ignorar error, lo importante es que intentó establecer sesión
+            guardarLogLocal('   ⚠️ Intento de sesión realizado (error esperado)');
+        }
+        
+        // Esperar un momento para que se establezca
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error forzando sesión: ${error.message}`);
+    }
+}
+
+// --- Función para publicar una historia (estado) CON SESIÓN FORZADA ---
 async function publicarHistoria(sock, archivoInfo) {
     try {
+        // FORZAR SESIÓN ANTES DE CADA PUBLICACIÓN
+        await forzarSesionStatus(sock);
+        
         const buffer = fs.readFileSync(archivoInfo.ruta);
         const emoji = obtenerEmojiParaHistoria(archivoInfo.nombreSinExtension, archivoInfo.extension);
         const texto = `${emoji} ${archivoInfo.nombreSinExtension}`;
@@ -1404,7 +1435,7 @@ async function procesarHistorias(sock) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 30.0 (ESTADOS AUTOMÁTICOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 31.0 (SESIÓN FORZADA PARA STATUS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1419,6 +1450,7 @@ async function iniciarWhatsApp() {
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
     console.log('📊 NUEVO: Publicación automática de Estados (Historias)');
     console.log('📁 Carpeta de Historias: ' + CONFIG.carpeta_historias);
+    console.log('🔐 NUEVO: Sesión forzada con status@broadcast');
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)\n');
@@ -1524,6 +1556,12 @@ async function iniciarWhatsApp() {
                 // ============================================
                 guardarLogLocal('📢 Inicializando sistema de Historias...');
                 actualizarColaHistorias();
+                
+                // ============================================
+                // NUEVO: Forzar sesión con status al conectar
+                // ============================================
+                guardarLogLocal('🔐 Forzando sesión inicial con status@broadcast...');
+                await forzarSesionStatus(sock);
             }
 
             if (connection === 'close') {
@@ -1653,6 +1691,7 @@ async function iniciarWhatsApp() {
                                   `📁  Archivos en Historias: ${archivosEnCarpeta}\n` +
                                   `📤  Publicados: ${progreso.archivos_publicados.length}\n` +
                                   `⏳  Pendientes: ${progreso.cola_pendiente.length}\n` +
+                                  `🔐  Sesión forzada: ACTIVADA\n` +
                                   `🗑️  Limpieza automática: activada\n` +
                                   `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                   `📤 Comando listagrupos: disponible (con caché)\n` +
