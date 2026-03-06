@@ -21,7 +21,7 @@ const crypto = require('crypto');
 const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
 // ============================================
-// FUNCIÓN AUXILIAR: PROCESADOR DE SPINTAX {A|B|C}
+// NUEVA FUNCIONALIDAD: PROCESADOR DE SPINTAX
 // ============================================
 function procesarSpintax(texto) {
     if (!texto) return "";
@@ -133,8 +133,8 @@ async function enviarMensajeProgramado(sock, grupo) {
     try {
         const id_grupo = grupo.id_grupo;
         
-        // --- PROCESAMIENTO DE SPINTAX SOBRE EL MENSAJE ORIGINAL ---
-        const mensajeFinal = procesarSpintax(grupo.mensaje || "");
+        // --- PROCESAR SPINTAX AQUÍ ---
+        const mensajeProcesado = procesarSpintax(grupo.mensaje || "");
         
         guardarLogLocal(`📤 Preparando envío a: ${grupo.nombre} (${id_grupo})`);
         
@@ -142,12 +142,12 @@ async function enviarMensajeProgramado(sock, grupo) {
         await simularTyping(sock, id_grupo, 3);
         
         // Verificar si el mensaje procesado tiene etiquetas multimedia
-        const archivoInfo = buscarArchivoMultimedia(mensajeFinal);
+        const archivoInfo = buscarArchivoMultimedia(mensajeProcesado);
         
         if (archivoInfo) {
-            await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, mensajeFinal);
+            await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, mensajeProcesado);
         } else {
-            await sock.sendMessage(id_grupo, { text: mensajeFinal });
+            await sock.sendMessage(id_grupo, { text: mensajeProcesado });
         }
         
         guardarLogLocal(`✅ Mensaje enviado a: ${grupo.nombre}`);
@@ -190,7 +190,6 @@ async function sincronizarYProgramar(sock) {
             const diasCron = grupo.dias.split(',').map(d => diasMap[d.trim().toUpperCase()]).join(',');
 
             cron.schedule(`${minuto} ${hora} * * ${diasCron}`, async () => {
-                // Calcular tiempo aleatorio basado en la configuración de la hoja
                 const min = parseInt(config.TIEMPO_ENTRE_MENSAJES.split('-')[0]) || 1;
                 const max = parseInt(config.TIEMPO_ENTRE_MENSAJES.split('-')[1]) || 30;
                 const waitTime = Math.floor(Math.random() * (max - min + 1) + min) * 60 * 1000;
@@ -252,7 +251,7 @@ async function iniciarWhatsApp() {
             markOnlineOnConnect: true
         });
 
-        // --- LÓGICA DE PAIRING CODE (CÓDIGO DE EMPAREJAMIENTO) ---
+        // VINCULACIÓN POR CÓDIGO (PAIRING CODE)
         if (!sock.authState.creds.registered) {
             console.log('--- INICIANDO VINCULACIÓN POR CÓDIGO ---');
             const phoneNumber = await question('📱 Introduce tu número de teléfono (ej. 52199...): ');
@@ -281,7 +280,6 @@ async function iniciarWhatsApp() {
                 
                 sincronizarYProgramar(sock);
                 
-                // Keep-alive cada 25 segundos
                 setInterval(async () => {
                     await sock.sendPresenceUpdate('available');
                 }, 25000);
@@ -298,21 +296,18 @@ async function iniciarWhatsApp() {
             const textoMensaje = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
             if (!esGrupo) {
-                // COMANDO ACTUALIZAR
                 if (textoMensaje === 'actualizar') {
                     await sock.sendMessage(remitente, { text: '🔄 Sincronizando grupos y tareas... por favor espera.' });
                     await sincronizarYProgramar(sock);
                     await sock.sendMessage(remitente, { text: '✅ Sincronización completada.' });
                 }
                 
-                // COMANDO LISTAGRUPOS
                 if (textoMensaje === 'listagrupos') {
                     await sock.sendMessage(remitente, { text: '🔍 Enviando lista de grupos a Google Sheets...' });
                     await enviarListaGruposASheets(sock);
                     await sock.sendMessage(remitente, { text: '✅ Lista actualizada en la pestaña LISTA_GRUPOS.' });
                 }
 
-                // COMANDO STATUS
                 if (textoMensaje === 'status') {
                     const stats = fs.statSync(CONFIG.archivo_store);
                     const existeSesion = fs.existsSync(CONFIG.carpeta_sesion);
@@ -356,7 +351,6 @@ console.log('====================================');
 
 iniciarWhatsApp();
 
-// Tareas de mantenimiento (Actualización programada cada 12 horas)
 cron.schedule('0 6,18 * * *', () => {
     guardarLogLocal('⏰ Ejecutando actualización programada...');
 });
