@@ -51,27 +51,7 @@ npm install pino
 npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
-# PASO 5: CREAR SCRIPT DE ACTUALIZACIÓN AUTOMÁTICA
-cd ..
-cat > update-baileys.sh << 'EOF'
-#!/bin/bash
-echo "$(date): Iniciando actualización programada de Baileys..." >> /storage/emulated/0/WhatsAppBot/logs/updates.log
-pkill -f "node bot.js"
-sleep 3
-cd /data/data/com.termux/files/home/whatsapp-bot-termux/whatsapp-bot
-npm update @whiskeysockets/baileys
-cd /data/data/com.termux/files/home/whatsapp-bot-termux/whatsapp-bot
-nohup node bot.js > /dev/null 2>&1 &
-echo "$(date): Bot reiniciado" >> /storage/emulated/0/WhatsAppBot/logs/updates.log
-EOF
-
-chmod +x update-baileys.sh
-
-# PASO 6: CONFIGURAR CRON (CADA 15 DÍAS)
-sv up cron
-(crontab -l 2>/dev/null; echo "0 3 */15 * * /data/data/com.termux/files/home/whatsapp-bot-termux/update-baileys.sh") | crontab -
-
-# PASO 7: Crear carpeta de logs
+# PASO 5: Crear carpeta de logs
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
 
 echo ""
@@ -80,7 +60,7 @@ echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
 
-# PASO 8: Preguntar si quiere iniciar
+# PASO 6: Preguntar si quiere iniciar
 echo "🤖 El bot ya está instalado"
 echo ""
 echo "¿Quieres iniciar el bot AHORA?"
