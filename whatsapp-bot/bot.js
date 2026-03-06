@@ -1,9 +1,9 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 40.0 - CON SPINTEX Y SPINEMOJI
+// Versión: 40.1 - SPINTEX CORREGIDO PARA BAILEYS
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos
-// + NUEVO: Sistema de SpinTex y SpinEmoji
+// + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -611,7 +611,7 @@ function limpiarCacheImagenes() {
 }
 
 // ============================================
-// >>> NUEVO: FUNCIÓN PARA PROCESAR SPINTEX Y SPINEMOJI <<<
+// NUEVA FUNCIÓN: PROCESAR SPINTEX Y SPINEMOJI (CORREGIDA PARA BAILEYS)
 // ============================================
 function procesarSpinEnMensaje(texto) {
     if (!texto || typeof texto !== 'string') return texto;
@@ -635,10 +635,14 @@ function procesarSpinEnMensaje(texto) {
         }
     }
     
-    // 2. Procesar SpinEmoji: {emoji|😀|😎|🥳}
-    const spinEmojiRegex = /\{emoji\|(.*?)\}/gi;
+    // 2. Procesar SpinEmoji: {emoji|😀|😎|🥳} o simplemente {👋|😊|✨|🙌} SIN palabra clave
+    // Esta versión detecta CUALQUIER contenido entre llaves que sean emojis o texto
+    const spinEmojiRegex = /\{([^}]+)\}/g;
     
     while ((match = spinEmojiRegex.exec(texto)) !== null) {
+        // Si ya fue procesado por spinTex, lo saltamos
+        if (match[0].startsWith('{spin|')) continue;
+        
         const contenido = match[1];
         const opciones = contenido.split('|').map(op => op.trim()).filter(op => op !== '');
         
@@ -658,7 +662,7 @@ function procesarSpinEnMensaje(texto) {
 }
 
 // ============================================
-// FUNCIÓN PARA ENVIAR MENSAJE A GRUPO (con soporte multimedia y SPIN)
+// FUNCIÓN PARA ENVIAR MENSAJE A GRUPO (CORREGIDA PARA BAILEYS)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
@@ -666,16 +670,21 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
             return 'ERROR: ID inválido';
         }
         
-        // >>> NUEVO: Aplicar procesamiento de spin al mensaje <<<
+        // Aplicar procesamiento de spin al mensaje
         const mensajeProcesado = procesarSpinEnMensaje(mensajeOriginal);
         
+        // CORRECCIÓN CRÍTICA PARA BAILEYS:
+        // Forzar que el mensaje sea tratado como string plano
+        const mensajeFinal = String(mensajeProcesado);
+        
+        // Verificar si hay referencia a archivo multimedia: (nombrearchivo)
         const regexArchivo = /\(([^)]+)\)/;
-        const match = mensajeProcesado.match(regexArchivo);
+        const match = mensajeFinal.match(regexArchivo);
         
         if (match) {
             const nombreArchivo = match[1];
-            // NOTA: El textoLimpio ya viene con los spins procesados
-            const textoLimpio = mensajeProcesado.replace(regexArchivo, '').trim();
+            // Limpiar el texto quitando la referencia al archivo
+            const textoLimpio = mensajeFinal.replace(regexArchivo, '').trim();
             
             const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
             
@@ -684,39 +693,19 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
                 return resultado;
             } else {
                 guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}"`);
-                await sock.sendMessage(id_grupo, { text: mensajeProcesado });
+                // Enviar como texto simple con objeto básico
+                await sock.sendMessage(id_grupo, { text: mensajeFinal });
                 return 'TEXTO ENVIADO (archivo no encontrado)';
             }
         }
         
-        const urls = mensajeProcesado.match(/(?:https?:\/\/|wa\.me\/|youtu\.be\/)[^\s]+/g) || [];
-        const opciones = { text: mensajeProcesado };
-        
-        if (urls.length > 0) {
-            guardarLogLocal(`   🔗 Generando preview para: ${urls[0]}`);
-            
-            const linkPreview = await getUrlInfo(urls[0], {
-                thumbnailWidth: 2400,
-                fetchOpts: {
-                    timeout: 15000,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    }
-                },
-                followRedirects: true
-            });
-            
-            if (linkPreview) {
-                opciones.linkPreview = linkPreview;
-                guardarLogLocal(`   ✅ Preview generado: ${linkPreview.title || 'Sin título'}`);
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-        }
-        
-        await sock.sendMessage(id_grupo, opciones);
+        // CORRECCIÓN: Para mensajes de texto SIMPLE, usar objeto básico
+        // Esto evita cualquier interpretación de Baileys
+        await sock.sendMessage(id_grupo, { text: mensajeFinal });
         return 'TEXTO ENVIADO';
         
     } catch (error) {
+        guardarLogLocal(`   ❌ Error en envío: ${error.message}`);
         return 'ERROR: ' + error.message.substring(0, 50);
     }
 }
@@ -1185,7 +1174,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 40.0 (CON SPINTEX Y SPINEMOJI)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 40.1 (SPINTEX CORREGIDO PARA BAILEYS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1205,9 +1194,9 @@ async function iniciarWhatsApp() {
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)');
     console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
-    console.log('🎲 **NUEVO: SPINTEX Y SPINEMOJI**');
+    console.log('🎲 **SPINTEX Y SPINEMOJI CORREGIDOS PARA BAILEYS**');
     console.log('   - {spin|opción1|opción2} → Elige aleatoriamente');
-    console.log('   - {emoji|😀|😎|🥳} → Elige emoji aleatorio\n');
+    console.log('   - {emoji|😀|😎|🥳} o {👋|😊|✨} → Elige emoji aleatorio\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1436,7 +1425,7 @@ async function iniciarWhatsApp() {
                                           `🗑️  Limpieza automática: activada\n` +
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
-                                          `🎲 SpinTex/SpinEmoji: ACTIVADO\n` +
+                                          `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
                                           `⏰ Próxima actualización: 6am/6pm`;
                             
                             await sock.sendMessage(remitente, { text: mensaje });
@@ -1468,7 +1457,7 @@ async function iniciarWhatsApp() {
                                       `🗑️  Limpieza automática: activada\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
-                                      `🎲 SpinTex/SpinEmoji: ACTIVADO\n` +
+                                      `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
@@ -1482,9 +1471,10 @@ async function iniciarWhatsApp() {
         console.log('   - "listagrupos" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
-        console.log('🎲 **NUEVO: SpinTex y SpinEmoji**');
-        console.log('   Ejemplo: "{spin|Hola|Qué tal|Buenos días}"');
-        console.log('   Ejemplo: "{emoji|😀|😎|🥳}"\n');
+        console.log('🎲 **SpinTex y SpinEmijo CORREGIDOS**');
+        console.log('   Ejemplo 1 (con palabra clave): "{spin|Hola|Qué tal|Buenos días}"');
+        console.log('   Ejemplo 2 (solo emojis): "{👋|😊|✨|🙌}"');
+        console.log('   Ejemplo 3 (con palabra clave emoji): "{emoji|😀|😎|🥳}"\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
