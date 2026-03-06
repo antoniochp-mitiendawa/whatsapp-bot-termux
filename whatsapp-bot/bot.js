@@ -3,7 +3,6 @@
 // Versión: 39.0 - CONSULTA MASIVA RESTAURADA
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos
-// + FUNCIONALIDAD ADICIONAL: Soporte Spintax {A|B}
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -22,7 +21,7 @@ const crypto = require('crypto');
 const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
 // ============================================
-// FUNCIÓN AUXILIAR PARA SPINTAX
+// FUNCIÓN AUXILIAR: PROCESADOR DE SPINTAX {A|B|C}
 // ============================================
 function procesarSpintax(texto) {
     if (!texto) return "";
@@ -63,6 +62,16 @@ const store = makeInMemoryStore({
     logger: pino({ level: 'silent' }) 
 });
 
+// Cargar store si existe
+if (fs.existsSync(CONFIG.archivo_store)) {
+    store.readFromFile(CONFIG.archivo_store);
+}
+
+// Guardar cada 10 segundos
+setInterval(() => {
+    store.writeToFile(CONFIG.archivo_store);
+}, 10000);
+
 function guardarLogLocal(mensaje) {
     const ahora = new Date();
     const timestamp = ahora.toLocaleString();
@@ -78,7 +87,7 @@ function limpiarCacheImagenes() {
         for (const archivo of archivos) {
             fs.unlinkSync(path.join(CONFIG.carpeta_cache, archivo));
         }
-        guardarLogLocal('🗑️ Caché de imágenes limpiada.');
+        guardarLogLocal('🗑️  Caché de imágenes limpiada.');
     }
 }
 
@@ -123,13 +132,16 @@ async function enviarArchivoMultimedia(sock, id_grupo, info, textoOriginal) {
 async function enviarMensajeProgramado(sock, grupo) {
     try {
         const id_grupo = grupo.id_grupo;
-        // AQUÍ SE APLICA EL SPINTAX SOBRE EL MENSAJE ORIGINAL
+        
+        // --- PROCESAMIENTO DE SPINTAX SOBRE EL MENSAJE ORIGINAL ---
         const mensajeFinal = procesarSpintax(grupo.mensaje || "");
         
         guardarLogLocal(`📤 Preparando envío a: ${grupo.nombre} (${id_grupo})`);
         
+        // Simular escritura (3 segundos)
         await simularTyping(sock, id_grupo, 3);
         
+        // Verificar si el mensaje procesado tiene etiquetas multimedia
         const archivoInfo = buscarArchivoMultimedia(mensajeFinal);
         
         if (archivoInfo) {
@@ -167,18 +179,25 @@ async function sincronizarYProgramar(sock) {
 
         guardarLogLocal(`📊 ${grupos.length} grupos activos encontrados.`);
 
+        // Limpiar tareas anteriores
         cron.getTasks().forEach(task => task.stop());
-        guardarLogLocal('🗑️ Tareas anteriores limpiadas.');
+        guardarLogLocal('🗑️  Tareas anteriores limpiadas.');
 
+        // Programar nuevos envíos
         grupos.forEach(grupo => {
             const [hora, minuto] = grupo.horario_rector.split(':');
             const diasMap = { 'L': 1, 'M': 2, 'MI': 3, 'J': 4, 'V': 5, 'S': 6, 'D': 0 };
             const diasCron = grupo.dias.split(',').map(d => diasMap[d.trim().toUpperCase()]).join(',');
 
             cron.schedule(`${minuto} ${hora} * * ${diasCron}`, async () => {
-                const waitTime = Math.floor(Math.random() * (CONFIG.tiempo_entre_mensajes_max - CONFIG.tiempo_entre_mensajes_min + 1) + CONFIG.tiempo_entre_mensajes_min) * 60 * 1000;
+                // Calcular tiempo aleatorio basado en la configuración de la hoja
+                const min = parseInt(config.TIEMPO_ENTRE_MENSAJES.split('-')[0]) || 1;
+                const max = parseInt(config.TIEMPO_ENTRE_MENSAJES.split('-')[1]) || 30;
+                const waitTime = Math.floor(Math.random() * (max - min + 1) + min) * 60 * 1000;
+                
                 guardarLogLocal(`⏳ Espera aleatoria para ${grupo.nombre}: ${waitTime/1000}s`);
                 await new Promise(r => setTimeout(r, waitTime));
+                
                 await enviarMensajeProgramado(sock, grupo);
             }, {
                 scheduled: true,
@@ -200,6 +219,7 @@ async function enviarListaGruposASheets(sock) {
         const url = fs.readFileSync(url_file, 'utf8').trim();
 
         guardarLogLocal('🔍 Obteniendo lista completa de grupos...');
+        
         const chats = await sock.groupFetchAllParticipating();
         const grupos = Object.values(chats).map(g => ({
             id: g.id,
@@ -213,6 +233,9 @@ async function enviarListaGruposASheets(sock) {
     }
 }
 
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+
 async function iniciarWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
     const { version } = await fetchLatestBaileysVersion();
@@ -221,7 +244,7 @@ async function iniciarWhatsApp() {
         const sock = makeWASocket({
             version,
             auth: state,
-            printQRInTerminal: true,
+            printQRInTerminal: false,
             logger: pino({ level: 'silent' }),
             browser: Browsers.macOS('Desktop'),
             generateHighQualityLinkPreview: true,
@@ -229,16 +252,20 @@ async function iniciarWhatsApp() {
             markOnlineOnConnect: true
         });
 
+        // --- LÓGICA DE PAIRING CODE (CÓDIGO DE EMPAREJAMIENTO) ---
+        if (!sock.authState.creds.registered) {
+            console.log('--- INICIANDO VINCULACIÓN POR CÓDIGO ---');
+            const phoneNumber = await question('📱 Introduce tu número de teléfono (ej. 52199...): ');
+            const code = await sock.requestPairingCode(phoneNumber.trim());
+            console.log(`\n🔗 TU CÓDIGO DE VINCULACIÓN: \x1b[32m${code}\x1b[0m\n`);
+        }
+
         store.bind(sock.ev);
 
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            
-            if (qr) {
-                console.log('📢 Nuevo QR generado. Escanea para conectar.');
-            }
+            const { connection, lastDisconnect } = update;
 
             if (connection === 'close') {
                 const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -251,6 +278,7 @@ async function iniciarWhatsApp() {
             } else if (connection === 'open') {
                 console.log('🟢 Bot Conectado y Listo.');
                 guardarLogLocal('--- BOT INICIADO Y CONECTADO ---');
+                
                 sincronizarYProgramar(sock);
                 
                 // Keep-alive cada 25 segundos
@@ -292,9 +320,9 @@ async function iniciarWhatsApp() {
                                   `✅ Conexión: Activa\n` +
                                   `📁 Carpeta Sesión: ${existeSesion ? 'OK' : 'ERROR'}\n` +
                                   `📊 Base de datos: ${(stats.size / 1024).toFixed(2)} KB\n` +
-                                  `🗑️ Limpieza automática: activada\n` +
-                                  `🌐 Browser: macOS/Desktop\n` +
-                                  `📤 Comando listagrupos: disponible\n` +
+                                  `🗑️  Limpieza automática: activada\n` +
+                                  `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                  `📤 Comando listagrupos: disponible (con caché)\n` +
                                   `⏰ Próxima actualización: 6am/6pm`;
                     
                     await sock.sendMessage(remitente, { text: mensaje });
@@ -303,8 +331,8 @@ async function iniciarWhatsApp() {
         });
 
         console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - Ejecutar sincronización manual');
-        console.log('   - "listagrupos" - Enviar IDs a Sheets');
+        console.log('   - "actualizar" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
+        console.log('   - "listagrupos" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
 
@@ -328,8 +356,7 @@ console.log('====================================');
 
 iniciarWhatsApp();
 
-// Tareas de mantenimiento
+// Tareas de mantenimiento (Actualización programada cada 12 horas)
 cron.schedule('0 6,18 * * *', () => {
     guardarLogLocal('⏰ Ejecutando actualización programada...');
-    // Aquí se reiniciaría la lógica de sincronización si fuera necesario
 });
