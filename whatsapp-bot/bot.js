@@ -1,10 +1,9 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 40.2 - VERSIÓN FIJA DE BAILEYS (6.7.21)
+// Versión: 40.1 - SPINTEX CORREGIDO PARA BAILEYS
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
-// + CORREGIDO: Versión fija de Baileys (sin actualizaciones automáticas)
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -1171,11 +1170,11 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP - VERSIÓN CON VERSIÓN FIJA DE BAILEYS
+// INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 40.2 (VERSIÓN FIJA DE BAILEYS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 40.1 (SPINTEX CORREGIDO PARA BAILEYS)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
     console.log('✍️  Typing adaptativo activado');
@@ -1197,8 +1196,7 @@ async function iniciarWhatsApp() {
     console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
     console.log('🎲 **SPINTEX Y SPINEMOJI CORREGIDOS PARA BAILEYS**');
     console.log('   - {spin|opción1|opción2} → Elige aleatoriamente');
-    console.log('   - {emoji|😀|😎|🥳} o {👋|😊|✨} → Elige emoji aleatorio');
-    console.log('🔒 **VERSIÓN FIJA DE BAILEYS: 6.7.21 (sin actualizaciones automáticas)**\n');
+    console.log('   - {emoji|😀|😎|🥳} o {👋|😊|✨} → Elige emoji aleatorio\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1207,9 +1205,8 @@ async function iniciarWhatsApp() {
     }
 
     try {
-        // VERSIÓN FIJA DE BAILEYS - NO SE ACTUALIZA AUTOMÁTICAMENTE
-        const version = [6, 7, 21];
-        console.log(`📦 Baileys versión: ${version.join('.')}`);
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
         
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
@@ -1429,7 +1426,6 @@ async function iniciarWhatsApp() {
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
                                           `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                          `🔒 Versión fija de Baileys: 6.7.21\n` +
                                           `⏰ Próxima actualización: 6am/6pm`;
                             
                             await sock.sendMessage(remitente, { text: mensaje });
@@ -1462,7 +1458,6 @@ async function iniciarWhatsApp() {
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
                                       `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                      `🔒 Versión fija de Baileys: 6.7.21\n` +
                                       `⏰ Próxima actualización: 6am/6pm`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
