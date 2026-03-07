@@ -748,12 +748,17 @@ function buscarArchivoPorProducto(nombreProducto) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Extraer nombre del producto del texto
+// NUEVA FUNCIÓN: Extraer nombre del producto del texto (CORREGIDA)
 // ============================================
 function extraerNombreProducto(texto) {
-    // Buscar texto entre asteriscos (formato negrita)
-    const match = texto.match(/\*([^*]+)\*/);
-    return match ? match[1].trim() : null;
+    // Buscar el ÚLTIMO par de asteriscos en el mensaje (que es donde está el producto)
+    const matches = [...texto.matchAll(/\*([^*]+)\*/g)];
+    if (matches.length > 0) {
+        // Tomar el último match (el producto)
+        const ultimo = matches[matches.length - 1];
+        return ultimo[1].trim();
+    }
+    return null;
 }
 
 // ============================================
