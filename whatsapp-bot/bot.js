@@ -1,4 +1,4 @@
-// ============================================
+}// ============================================
 // BOT DE WHATSAPP PARA TERMUX
 // Versión: 41.0 - SPINTEX LIMPIO + TABLA DE ARCHIVOS
 // + MEJORA 1: Keep-Alive cada 25 segundos
@@ -125,7 +125,7 @@ async function obtenerMetadataGrupoConCache(sock, groupId) {
 }
 
 // ============================================
-// FUNCIÓN PARA BUSCAR ARCHIVO MULTIMEDIA
+// FUNCIÓN PARA BUSCAR ARCHIVO MULTIMEDIA (CORREGIDA)
 // ============================================
 function buscarArchivoMultimedia(nombreArchivo) {
     try {
@@ -149,7 +149,8 @@ function buscarArchivoMultimedia(nombreArchivo) {
                         if (encontrado) return encontrado;
                     } else {
                         const nombreSinExtension = path.parse(archivo).name;
-                        if (nombreSinExtension.toLowerCase() === nombreLimpio.toLowerCase()) {
+                        // Comparación exacta sin modificar el nombre
+                        if (nombreSinExtension === nombreLimpio) {
                             guardarLogLocal(`   ✅ Archivo encontrado: ${rutaCompleta}`);
                             return {
                                 ruta: rutaCompleta,
@@ -725,17 +726,25 @@ async function actualizarCacheProductos(url) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Buscar archivo por nombre de producto
+// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (CORREGIDA)
 // ============================================
 function buscarArchivoPorProducto(nombreProducto) {
     if (!nombreProducto || productosCache.length === 0) return null;
     
+    // Buscar el producto exacto en el caché
     const producto = productosCache.find(p => 
-        p.producto.toLowerCase().includes(nombreProducto.toLowerCase()) ||
-        nombreProducto.toLowerCase().includes(p.producto.toLowerCase())
+        p.producto.toLowerCase() === nombreProducto.toLowerCase()
     );
     
-    return producto ? producto.archivo : null;
+    if (producto) {
+        // El archivo viene con paréntesis, los eliminamos
+        const archivoLimpio = producto.archivo.replace(/^\(|\)$/g, '');
+        guardarLogLocal(`   📦 Producto encontrado: "${producto.producto}" → archivo: "${archivoLimpio}"`);
+        return archivoLimpio;
+    }
+    
+    guardarLogLocal(`   ⚠️ Producto no encontrado en caché: "${nombreProducto}"`);
+    return null;
 }
 
 // ============================================
@@ -797,7 +806,7 @@ function procesarSpinEnMensaje(texto) {
 }
 
 // ============================================
-// FUNCIÓN MODIFICADA: ENVIAR MENSAJE (con tabla de correspondencia)
+// FUNCIÓN MODIFICADA: ENVIAR MENSAJE (con tabla de correspondencia CORREGIDA)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
@@ -817,21 +826,25 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
         let archivoEnviado = false;
         
         if (nombreProducto) {
+            guardarLogLocal(`   🔍 Producto detectado en mensaje: "${nombreProducto}"`);
             const nombreArchivo = buscarArchivoPorProducto(nombreProducto);
             
             if (nombreArchivo) {
-                guardarLogLocal(`   📦 Producto detectado: "${nombreProducto}" → archivo: ${nombreArchivo}`);
+                guardarLogLocal(`   📦 Buscando archivo: "${nombreArchivo}" en carpeta multimedia`);
                 const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
                 
                 if (archivoInfo) {
-                    guardarLogLocal(`   ✅ Archivo encontrado para el producto`);
-                    // Enviar archivo multimedia SIN texto (el texto se enviará después)
-                    const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, '');
+                    guardarLogLocal(`   ✅ Archivo encontrado: ${archivoInfo.nombre}`);
+                    
+                    // Limpiar el texto de posibles paréntesis residuales
+                    const textoLimpio = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
+                    
+                    // Enviar archivo multimedia con el texto como caption o por separado según el tipo
+                    const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio);
                     archivoEnviado = true;
-                    // Pequeña pausa entre archivo y texto
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    return resultado;
                 } else {
-                    guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}"`);
+                    guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}" en la carpeta multimedia`);
                 }
             }
         }
@@ -845,28 +858,23 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
             // Limpiar el texto quitando la referencia al archivo
             const textoLimpio = mensajeFinal.replace(regexArchivo, '').trim();
             
+            guardarLogLocal(`   🔍 Buscando archivo por referencia directa: "${nombreArchivo}"`);
             const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
             
             if (archivoInfo) {
                 const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio);
                 return resultado;
             } else {
-                guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}"`);
-                // Enviar como texto simple con objeto básico
+                guardarLogLocal(`   ⚠️ Archivo no encontrado por referencia directa: "${nombreArchivo}"`);
+                // Enviar como texto simple
                 await sock.sendMessage(id_grupo, { text: mensajeFinal });
                 return 'TEXTO ENVIADO (archivo no encontrado)';
             }
         }
         
-        // Si no hay archivo o ya se envió, enviar solo el texto
-        let textoFinal = mensajeFinal;
-        if (archivoEnviado) {
-            // Si ya enviamos archivo, limpiamos cualquier referencia residual
-            textoFinal = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
-        }
-        
-        await sock.sendMessage(id_grupo, { text: textoFinal });
-        return archivoEnviado ? 'TEXTO ENVIADO + ARCHIVO' : 'TEXTO ENVIADO';
+        // Si no hay archivo, enviar solo el texto
+        await sock.sendMessage(id_grupo, { text: mensajeFinal });
+        return 'TEXTO ENVIADO';
         
     } catch (error) {
         guardarLogLocal(`   ❌ Error en envío: ${error.message}`);
