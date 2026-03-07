@@ -466,6 +466,14 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
             const total = data.grupos?.length || 0;
             const pestanas = data.pestanas?.length || 0;
             guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en ${pestanas} pestañas`);
+            
+            // Actualizar caché de productos con los productos recibidos
+            if (data.productos && Array.isArray(data.productos)) {
+                productosCache = data.productos;
+                ultimaActualizacionProductos = Date.now();
+                guardarLogLocal(`📦 Caché de productos actualizado desde Sheets: ${productosCache.length} productos`);
+            }
+            
             return true;
         }
         return false;
