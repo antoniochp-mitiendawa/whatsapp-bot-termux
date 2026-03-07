@@ -726,7 +726,7 @@ async function actualizarCacheProductos(url) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (CORREGIDA)
+// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (CORREGIDA CON TRIM)
 // ============================================
 function buscarArchivoPorProducto(nombreProducto) {
     if (!nombreProducto || productosCache.length === 0) return null;
@@ -737,8 +737,8 @@ function buscarArchivoPorProducto(nombreProducto) {
     );
     
     if (producto) {
-        // El archivo viene con paréntesis, los eliminamos
-        const archivoLimpio = producto.archivo.replace(/^\(|\)$/g, '');
+        // El archivo viene con paréntesis, los eliminamos y aplicamos trim para quitar espacios extras
+        const archivoLimpio = producto.archivo.replace(/^\(|\)$/g, '').trim();
         guardarLogLocal(`   📦 Producto encontrado: "${producto.producto}" → archivo: "${archivoLimpio}"`);
         return archivoLimpio;
     }
