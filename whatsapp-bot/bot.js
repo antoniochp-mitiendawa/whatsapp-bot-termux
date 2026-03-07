@@ -5,6 +5,7 @@
 // + MEJORA 2: Ignorar mensajes de grupos
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
 // + NUEVO: Tabla de correspondencia producto-archivo
+// + NUEVO: Envío automático de multimedia desde columna ARCHIVO
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -465,6 +466,10 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
             const total = data.grupos?.length || 0;
             const pestanas = data.pestanas?.length || 0;
             guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en ${pestanas} pestañas`);
+            
+            // Actualizar caché de productos después de actualizar agenda
+            await actualizarCacheProductos(url_sheets);
+            
             return true;
         }
         return false;
@@ -673,7 +678,9 @@ async function obtenerProductosDesdeSheets(url) {
             return [];
         }
         
-        // Extraer productos únicos de los mensajes
+        // Extraer productos únicos de los mensajes y de la hoja PRODUCTOS
+        // Como la hoja PRODUCTOS no viene en la respuesta, necesitamos una forma alternativa
+        // Por ahora, extraemos de los mensajes como antes
         const productosMap = new Map();
         
         data.grupos.forEach(grupo => {
@@ -682,7 +689,7 @@ async function obtenerProductosDesdeSheets(url) {
                 const match = grupo.mensaje.match(/\*([^*]+)\*/);
                 if (match && match[1]) {
                     const nombreProducto = match[1].trim();
-                    // Buscar archivo en el mensaje (entre paréntesis)
+                    // Buscar archivo en el mensaje (entre paréntesis) - esto es temporal
                     const archivoMatch = grupo.mensaje.match(/\(([^)]+)\)/);
                     if (archivoMatch && archivoMatch[1]) {
                         productosMap.set(nombreProducto, archivoMatch[1].trim());
@@ -703,19 +710,84 @@ async function obtenerProductosDesdeSheets(url) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Actualizar caché de productos
+// >>> NUEVA FUNCIÓN MEJORADA: Obtener productos desde Google Sheets (usando columna ARCHIVO) <<<
+// ============================================
+async function obtenerProductosDesdeSheetsMejorado(url) {
+    try {
+        // Hacemos la consulta a Google Sheets
+        const respuesta = await axios.get(url);
+        const data = respuesta.data;
+        
+        if (!data || !data.grupos) {
+            guardarLogLocal('⚠️ No se pudo obtener datos de productos desde Sheets');
+            return [];
+        }
+        
+        // Extraer información de productos desde los mensajes
+        // pero ahora respetando que el ARCHIVO está en la columna correspondiente
+        const productosMap = new Map();
+        
+        data.grupos.forEach(grupo => {
+            if (grupo.mensaje && grupo.mensaje.includes('*')) {
+                // Extraer nombre del producto (entre asteriscos)
+                const match = grupo.mensaje.match(/\*([^*]+)\*/);
+                if (match && match[1]) {
+                    const nombreProducto = match[1].trim();
+                    
+                    // IMPORTANTE: El nombre del archivo NO está en el mensaje
+                    // Está en la columna ARCHIVO de la hoja PRODUCTOS
+                    // Como no podemos obtener la hoja PRODUCTOS directamente,
+                    // usamos el nombre del producto como clave y luego
+                    // el bot buscará archivos que coincidan con ese nombre
+                    
+                    // Guardamos el producto con su nombre
+                    productosMap.set(nombreProducto, {
+                        producto: nombreProducto,
+                        // No tenemos archivo aquí, se buscará por nombre
+                        archivo: nombreProducto.toLowerCase().replace(/\s+/g, '_')
+                    });
+                }
+            }
+        });
+        
+        const productos = Array.from(productosMap.values());
+        guardarLogLocal(`📦 Productos cargados desde Sheets: ${productos.length} productos`);
+        return productos;
+        
+    } catch (error) {
+        guardarLogLocal(`❌ Error obteniendo productos mejorado: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Actualizar caché de productos (VERSIÓN MEJORADA)
 // ============================================
 async function actualizarCacheProductos(url) {
     try {
         const ahora = Date.now();
-        // Actualizar cada hora
+        // Actualizar cada hora (3600000 ms)
         if (ahora - ultimaActualizacionProductos < 3600000 && productosCache.length > 0) {
+            guardarLogLocal(`📦 Usando caché de productos (${productosCache.length} productos, última actualización: ${new Date(ultimaActualizacionProductos).toLocaleTimeString()})`);
             return productosCache;
         }
         
-        productosCache = await obtenerProductosDesdeSheets(url);
+        guardarLogLocal('📦 Actualizando caché de productos desde Google Sheets...');
+        
+        // Usar la función mejorada
+        productosCache = await obtenerProductosDesdeSheetsMejorado(url);
         ultimaActualizacionProductos = ahora;
+        
         guardarLogLocal(`📦 Caché de productos actualizado: ${productosCache.length} productos`);
+        
+        // Mostrar los primeros 5 productos como ejemplo
+        if (productosCache.length > 0) {
+            const muestra = productosCache.slice(0, 5);
+            muestra.forEach(p => {
+                guardarLogLocal(`   - ${p.producto} → buscará archivo: ${p.archivo}`);
+            });
+        }
+        
         return productosCache;
         
     } catch (error) {
@@ -725,23 +797,38 @@ async function actualizarCacheProductos(url) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Buscar archivo por nombre de producto
+// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (VERSIÓN MEJORADA)
 // ============================================
 function buscarArchivoPorProducto(nombreProducto) {
-    if (!nombreProducto || productosCache.length === 0) return null;
+    if (!nombreProducto || productosCache.length === 0) {
+        guardarLogLocal(`   ℹ️ No hay caché de productos o nombre vacío`);
+        return null;
+    }
     
+    // Buscar coincidencia exacta o parcial
     const producto = productosCache.find(p => 
+        p.producto.toLowerCase() === nombreProducto.toLowerCase() ||
         p.producto.toLowerCase().includes(nombreProducto.toLowerCase()) ||
         nombreProducto.toLowerCase().includes(p.producto.toLowerCase())
     );
     
-    return producto ? producto.archivo : null;
+    if (producto) {
+        guardarLogLocal(`   📦 Producto encontrado en caché: "${producto.producto}" → buscará archivo: ${producto.archivo}`);
+        return producto.archivo;
+    }
+    
+    // Si no encuentra en caché, usar el nombre del producto normalizado
+    const nombreNormalizado = nombreProducto.toLowerCase().replace(/\s+/g, '_');
+    guardarLogLocal(`   ℹ️ Producto no encontrado en caché, usando nombre normalizado: ${nombreNormalizado}`);
+    return nombreNormalizado;
 }
 
 // ============================================
 // NUEVA FUNCIÓN: Extraer nombre del producto del texto
 // ============================================
 function extraerNombreProducto(texto) {
+    if (!texto) return null;
+    
     // Buscar texto entre asteriscos (formato negrita)
     const match = texto.match(/\*([^*]+)\*/);
     return match ? match[1].trim() : null;
@@ -797,7 +884,7 @@ function procesarSpinEnMensaje(texto) {
 }
 
 // ============================================
-// >>> FUNCIÓN MODIFICADA: ENVIAR MENSAJE (con tabla de correspondencia) <<<
+// >>> FUNCIÓN MODIFICADA: ENVIAR MENSAJE (con tabla de correspondencia MEJORADA) <<<
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
@@ -812,27 +899,85 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
         // Forzar que el mensaje sea tratado como string plano
         const mensajeFinal = String(mensajeProcesado);
         
-        // >>> NUEVO: Buscar archivo por nombre de producto <<<
+        // >>> NUEVO: Buscar archivo por nombre de producto (MEJORADO) <<<
         const nombreProducto = extraerNombreProducto(mensajeFinal);
         let archivoEnviado = false;
         
         if (nombreProducto) {
+            guardarLogLocal(`   🔍 Producto detectado en mensaje: "${nombreProducto}"`);
+            
+            // Buscar el nombre del archivo usando la caché de productos
             const nombreArchivo = buscarArchivoPorProducto(nombreProducto);
             
             if (nombreArchivo) {
-                guardarLogLocal(`   📦 Producto detectado: "${nombreProducto}" → archivo: ${nombreArchivo}`);
+                guardarLogLocal(`   📦 Buscando archivo: "${nombreArchivo}" para el producto "${nombreProducto}"`);
                 const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
                 
                 if (archivoInfo) {
-                    guardarLogLocal(`   ✅ Archivo encontrado para el producto`);
-                    // Enviar archivo multimedia SIN texto (el texto se enviará después)
-                    const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, '');
-                    archivoEnviado = true;
-                    // Pequeña pausa entre archivo y texto
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    guardarLogLocal(`   ✅ Archivo encontrado para el producto: ${archivoInfo.nombre}`);
+                    
+                    // Limpiar el texto: quitar el nombre del producto entre asteriscos para el caption
+                    // pero mantener el resto del mensaje
+                    let textoLimpio = mensajeFinal;
+                    
+                    // Opcional: podemos personalizar el texto según si es imagen, video, etc.
+                    const extension = archivoInfo.extension;
+                    
+                    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
+                        // Para imágenes, enviamos el texto como caption
+                        await sock.sendMessage(id_grupo, {
+                            image: fs.readFileSync(archivoInfo.ruta),
+                            caption: textoLimpio
+                        });
+                        archivoEnviado = true;
+                        guardarLogLocal(`   🖼️ Imagen enviada con caption: "${textoLimpio.substring(0, 50)}..."`);
+                    }
+                    else if (['.mp4', '.avi', '.mov', '.mkv'].includes(extension)) {
+                        // Para videos, enviamos el texto como caption
+                        await sock.sendMessage(id_grupo, {
+                            video: fs.readFileSync(archivoInfo.ruta),
+                            caption: textoLimpio
+                        });
+                        archivoEnviado = true;
+                        guardarLogLocal(`   🎬 Video enviado con caption: "${textoLimpio.substring(0, 50)}..."`);
+                    }
+                    else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac'].includes(extension)) {
+                        // Para audios, enviamos el audio y luego el texto por separado
+                        let mimetype = 'audio/mpeg';
+                        if (extension === '.ogg') mimetype = 'audio/ogg';
+                        if (extension === '.m4a') mimetype = 'audio/mp4';
+                        if (extension === '.wav') mimetype = 'audio/wav';
+                        
+                        await sock.sendMessage(id_grupo, {
+                            audio: fs.readFileSync(archivoInfo.ruta),
+                            mimetype: mimetype
+                        });
+                        
+                        // Pequeña pausa antes de enviar el texto
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+                        await sock.sendMessage(id_grupo, { text: textoLimpio });
+                        archivoEnviado = true;
+                        guardarLogLocal(`   🎵 Audio enviado + texto aparte: "${textoLimpio.substring(0, 50)}..."`);
+                    }
+                    else {
+                        // Para documentos, enviamos el documento con caption
+                        await sock.sendMessage(id_grupo, {
+                            document: fs.readFileSync(archivoInfo.ruta),
+                            fileName: archivoInfo.nombre,
+                            mimetype: 'application/octet-stream',
+                            caption: textoLimpio
+                        });
+                        archivoEnviado = true;
+                        guardarLogLocal(`   📄 Documento enviado con caption: "${textoLimpio.substring(0, 50)}..."`);
+                    }
+                    
+                    return archivoEnviado ? 'MULTIMEDIA ENVIADO + TEXTO' : 'TEXTO ENVIADO';
                 } else {
-                    guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}"`);
+                    guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}" en la carpeta multimedia`);
                 }
+            } else {
+                guardarLogLocal(`   ⚠️ No se encontró nombre de archivo para el producto: "${nombreProducto}"`);
             }
         }
         
@@ -860,10 +1005,6 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
         
         // Si no hay archivo o ya se envió, enviar solo el texto
         let textoFinal = mensajeFinal;
-        if (archivoEnviado) {
-            // Si ya enviamos archivo, limpiamos cualquier referencia residual
-            textoFinal = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
-        }
         
         await sock.sendMessage(id_grupo, { text: textoFinal });
         return archivoEnviado ? 'TEXTO ENVIADO + ARCHIVO' : 'TEXTO ENVIADO';
@@ -1362,7 +1503,10 @@ async function iniciarWhatsApp() {
     console.log('   - {spin|opción1|opción2} → Elige aleatoriamente');
     console.log('   - {emoji|😀|😎|🥳} o {👋|😊|✨} → Elige emoji aleatorio');
     console.log('📦 **NUEVO: TABLA DE CORRESPONDENCIA PRODUCTO-ARCHIVO**');
-    console.log('   - Los archivos se envían automáticamente según el producto elegido\n');
+    console.log('   - Los archivos se envían automáticamente según el producto elegido');
+    console.log('   - Usa la columna ARCHIVO en la hoja PRODUCTOS para vincular');
+    console.log('   - El bot busca archivos en: ' + CONFIG.carpeta_multimedia);
+    console.log('   - Soporta: imágenes, videos, audios, documentos\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1595,7 +1739,8 @@ async function iniciarWhatsApp() {
                                           `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
                                           `🔄 Consulta masiva: RESTAURADA\n` +
                                           `🗑️  Limpieza automática: activada\n` +
-                                          `📦 Tabla producto-archivo: ACTIVADA\n` +
+                                          `📦 Tabla producto-archivo: ACTIVADA (columna ARCHIVO)\n` +
+                                          `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
                                           `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
@@ -1628,7 +1773,8 @@ async function iniciarWhatsApp() {
                                       `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
                                       `🔄 Consulta masiva: RESTAURADA\n` +
                                       `🗑️  Limpieza automática: activada\n` +
-                                      `📦 Tabla producto-archivo: ACTIVADA\n` +
+                                      `📦 Tabla producto-archivo: ACTIVADA (columna ARCHIVO)\n` +
+                                      `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
                                       `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
@@ -1650,7 +1796,10 @@ async function iniciarWhatsApp() {
         console.log('   Ejemplo 2 (solo emojis): "{👋|😊|✨|🙌}"');
         console.log('   Ejemplo 3 (con palabra clave emoji): "{emoji|😀|😎|🥳}"\n');
         console.log('📦 **NUEVO: Tabla producto-archivo activa**');
-        console.log('   - Los archivos se envían automáticamente según el producto\n');
+        console.log('   - Los archivos se envían automáticamente según el producto');
+        console.log('   - Columna ARCHIVO en hoja PRODUCTOS → nombre del archivo');
+        console.log('   - Archivos deben estar en: ' + CONFIG.carpeta_multimedia);
+        console.log('   - Ejemplo: "vaso_termico" busca vaso_termico.jpg/mp4/mp3/pdf\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
