@@ -18,7 +18,7 @@ const pino = require('pino');
 const { getLinkPreview } = require('link-preview-js');
 const crypto = require('crypto');
 // ============================================
-// LIBRERÍA PARA DATA STORE (RESTAURADA)
+// LIBRERÍA PARA DATA STORE (FUNCIONAL)
 // ============================================
 const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
@@ -62,7 +62,7 @@ if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
 }
 
 // ============================================
-// INICIALIZAR DATA STORE (RESTAURADO)
+// INICIALIZAR DATA STORE (FUNCIONAL)
 // ============================================
 console.log('📚 Inicializando Data Store...');
 const store = makeInMemoryStore({
