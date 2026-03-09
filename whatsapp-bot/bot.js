@@ -532,10 +532,9 @@ function generarHashURL(url) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
+// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW (DESHABILITADA)
 // ============================================
-// NOTA: Esta función requiere link-preview-js, pero se ha eliminado por problemas de compatibilidad
-// Si necesitas esta funcionalidad, instala link-preview-js por separado
+// Esta función requiere link-preview-js que se eliminó por problemas de compatibilidad
 
 // ============================================
 // FUNCIÓN PARA OBTENER IMAGEN CON CACHÉ LOCAL
@@ -1580,7 +1579,7 @@ async function iniciarWhatsApp() {
                                           `📌 Pestañas: ${pestanas}\n` +
                                           `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                           `✍️  Typing adaptativo: activado\n` +
-                                          `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                          `🔗 Link Previews: título/descripción con Baileys\n` +
                                           `📚 Data Store: ACTIVADO (extracción local)\n` +
                                           `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                           `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
@@ -1613,7 +1612,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                      `🔗 Link Previews: título/descripción con Baileys\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                       `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
