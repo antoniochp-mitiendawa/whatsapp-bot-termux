@@ -37,7 +37,7 @@ npm init -y
 echo "📦 PASO 7: Instalando Baileys..."
 npm install @whiskeysockets/baileys
 
-# PASO 9: Instalar otras librerías útiles
+# PASO 9: Instalar otras librerías útiles (TODAS)
 echo "📦 PASO 8: Instalando librerías adicionales..."
 npm install qrcode-terminal
 npm install node-cron
