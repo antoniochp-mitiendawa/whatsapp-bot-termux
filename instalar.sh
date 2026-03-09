@@ -37,7 +37,7 @@ echo $USER_URL > url_sheets.txt
 mkdir -p whatsapp-bot
 echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias
+# PASO 4: Instalar dependencias (SOLO CAMBIO: versión específica de Baileys)
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
 cd whatsapp-bot
