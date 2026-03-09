@@ -37,12 +37,12 @@ echo $USER_URL > url_sheets.txt
 mkdir -p whatsapp-bot
 echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias (TODAS las necesarias)
+# PASO 4: Instalar dependencias
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
-npm install @whiskeysockets/baileys
+npm install @whiskeysockets/baileys@6.7.0
 npm install @hapi/boom
 npm install qrcode-terminal
 npm install node-cron
