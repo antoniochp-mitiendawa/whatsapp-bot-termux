@@ -33,11 +33,11 @@ cd whatsapp-bot
 echo "📦 PASO 6: Preparando proyecto..."
 npm init -y
 
-# PASO 8: Instalar Baileys
+# PASO 8: Instalar Baileys (VERSIÓN ESPECÍFICA)
 echo "📦 PASO 7: Instalando Baileys..."
-npm install @whiskeysockets/baileys
+npm install @whiskeysockets/baileys@6.7.0
 
-# PASO 9: Instalar otras librerías útiles (TODAS)
+# PASO 9: Instalar otras librerías útiles
 echo "📦 PASO 8: Instalando librerías adicionales..."
 npm install qrcode-terminal
 npm install node-cron
