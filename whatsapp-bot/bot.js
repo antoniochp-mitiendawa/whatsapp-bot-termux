@@ -1339,6 +1339,9 @@ async function iniciarWhatsApp() {
             } catch (e) {}
         });
 
+        // ============================================
+        // CÓDIGO DE EMPAREJAMIENTO RESTAURADO
+        // ============================================
         if (!sock.authState.creds.registered) {
             console.log('📱 PRIMERA CONFIGURACIÓN\n');
             const numero = await pedirNumeroSilencioso();
