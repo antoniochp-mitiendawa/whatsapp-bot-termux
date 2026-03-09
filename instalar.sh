@@ -1,51 +1,85 @@
 #!/bin/bash
 
 echo "===================================="
-echo "🚀 INSTALADOR WHATSAPP BOT v41.0"
-echo "CON PERSISTENCIA PARA TERMUX"
+echo "🚀 INSTALADOR WHATSAPP BOT v40.0"
 echo "===================================="
 echo ""
 
-# PASO 1: Instalar dependencias del sistema (Tus originales + PM2)
+# PASO 1: Instalar lo básico
 echo "📦 PASO 1: Instalando programas necesarios..."
 pkg update -y
-pkg upgrade -y
-pkg install git nodejs termux-api cronie termux-services wget -y
-npm install -g pm2
+pkg install git -y
+pkg install nodejs -y
+pkg install yarn -y
+pkg install cronie termux-services -y
+pkg install wget -y
 
-# PASO 2: Configuración de carpeta
-echo "📦 PASO 2: Configurando directorio..."
-cd ~
-mkdir -p whatsapp-bot-termux
+# PASO 2: Clonar el repositorio
+echo "📦 PASO 2: Descargando el bot..."
+rm -rf whatsapp-bot-termux 2>/dev/null
+git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
 cd whatsapp-bot-termux
 
-# PASO 3: Guardar la URL de Google Sheets
+# PASO 3: Guardar la URL
 echo ""
 echo "===================================="
 echo "🔗 URL DE GOOGLE SHEETS"
 echo "===================================="
+echo "1. Abre Google Sheets"
+echo "2. En el menú 'Control WhatsApp'"
+echo "3. Ve a '📚 Ver Instrucciones'"
+echo "4. Copia la URL que aparece"
+echo "===================================="
+echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
+mkdir -p whatsapp-bot
+echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar librerías de Node (Todas las de tu Botjs.txt)
+# PASO 4: Instalar dependencias (SIN dependencias opcionales)
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
+cd whatsapp-bot
 npm init -y
-npm install @whiskeysockets/baileys @hapi/boom qrcode-terminal node-cron axios pino link-preview-js @rodrigogs/baileys-store
+npm install @whiskeysockets/baileys@6.7.0 --no-optional
+npm install @hapi/boom --no-optional
+npm install qrcode-terminal --no-optional
+npm install node-cron --no-optional
+npm install axios --no-optional
+npm install pino --no-optional
+npm install link-preview-js --no-optional
+npm install @rodrigogs/baileys-store --no-optional
 
-# PASO 5: Crear carpeta de logs en memoria externa
+# PASO 5: Crear carpeta de logs
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
-
-# PASO 6: ACTIVAR WAKE LOCK
-# Esto evita que Android suspenda a Termux cuando apagas la pantalla
-termux-wake-lock
 
 echo ""
 echo "===================================="
 echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
-echo "1. Crea el archivo Bot.js y pega el código"
-echo "2. Para iniciar usa: pm2 start Bot.js --name bot-wa"
-echo "3. Para ver el QR usa: pm2 logs bot-wa"
-echo "===================================="
+echo ""
+
+# PASO 6: Preguntar si quiere iniciar
+echo "🤖 El bot ya está instalado"
+echo ""
+echo "¿Quieres iniciar el bot AHORA?"
+echo "Escribe 1 y presiona Enter para INICIAR"
+echo "Escribe 2 y presiona Enter para SALIR"
+echo ""
+read OPCION
+
+if [ "$OPCION" == "1" ]; then
+    echo ""
+    echo "🚀 INICIANDO BOT..."
+    echo "======================"
+    echo ""
+    cd whatsapp-bot
+    node bot.js
+else
+    echo ""
+    echo "📝 Para iniciar el bot después:"
+    echo "cd whatsapp-bot-termux/whatsapp-bot"
+    echo "node bot.js"
+    echo ""
+fi
