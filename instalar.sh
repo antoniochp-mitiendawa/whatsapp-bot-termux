@@ -37,19 +37,19 @@ echo $USER_URL > url_sheets.txt
 mkdir -p whatsapp-bot
 echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias (SIN dependencias opcionales)
+# PASO 4: Instalar dependencias
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
 cd whatsapp-bot
 npm init -y
-npm install @whiskeysockets/baileys@6.7.0 --no-optional
-npm install @hapi/boom --no-optional
-npm install qrcode-terminal --no-optional
-npm install node-cron --no-optional
-npm install axios --no-optional
-npm install pino --no-optional
-npm install link-preview-js --no-optional
-npm install @rodrigogs/baileys-store --no-optional
+npm install @whiskeysockets/baileys
+npm install @hapi/boom
+npm install qrcode-terminal
+npm install node-cron
+npm install axios
+npm install pino
+npm install link-preview-js
+npm install @rodrigogs/baileys-store
 
 # PASO 5: Crear carpeta de logs
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
