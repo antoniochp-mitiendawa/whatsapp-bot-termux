@@ -37,7 +37,7 @@ echo $USER_URL > url_sheets.txt
 mkdir -p whatsapp-bot
 echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias (SOLO CAMBIO: versión específica de Baileys)
+# PASO 4: Instalar dependencias (SIN link-preview-js)
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
 cd whatsapp-bot
@@ -48,7 +48,6 @@ npm install qrcode-terminal
 npm install node-cron
 npm install axios
 npm install pino
-npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
 # PASO 5: Crear carpeta de logs
