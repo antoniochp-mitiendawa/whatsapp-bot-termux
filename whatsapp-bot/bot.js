@@ -1471,7 +1471,8 @@ async function iniciarWhatsApp() {
             } catch (error) {
                 console.log('❌ Error al generar código:', error.message);
                 console.log('🔄 Reintentando en 5 segundos...');
-                setTimeout(() => iniciarWhatsApp(), 5000);
+                // Dejar que Baileys reconecte automáticamente
+guardarLogLocal('⏱️ Esperando reconexión automática de Baileys...');
                 return;
             }
         }
