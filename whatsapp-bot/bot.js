@@ -15,6 +15,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const readline = require('readline');
 const pino = require('pino');
+const { getLinkPreview } = require('link-preview-js');
 const crypto = require('crypto');
 // ============================================
 // LIBRERÍA PARA DATA STORE
@@ -532,9 +533,34 @@ function generarHashURL(url) {
 }
 
 // ============================================
-// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW (DESHABILITADA)
+// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
 // ============================================
-// Esta función requiere link-preview-js que se eliminó por problemas de compatibilidad
+async function obtenerUrlImagenPreview(url) {
+    try {
+        guardarLogLocal(`   🔍 Buscando imagen para: ${url}`);
+        
+        const previewData = await getLinkPreview(url, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            followRedirects: 'follow'
+        });
+        
+        if (previewData.images && previewData.images.length > 0) {
+            const imagenUrl = previewData.images[0];
+            guardarLogLocal(`   🖼️ URL de imagen encontrada: ${imagenUrl.substring(0, 50)}...`);
+            return imagenUrl;
+        }
+        
+        guardarLogLocal('   ⚠️ No se encontraron imágenes');
+        return null;
+        
+    } catch (error) {
+        guardarLogLocal(`   ⚠️ Error obteniendo URL de imagen: ${error.message}`);
+        return null;
+    }
+}
 
 // ============================================
 // FUNCIÓN PARA OBTENER IMAGEN CON CACHÉ LOCAL
@@ -1579,7 +1605,7 @@ async function iniciarWhatsApp() {
                                           `📌 Pestañas: ${pestanas}\n` +
                                           `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                           `✍️  Typing adaptativo: activado\n` +
-                                          `🔗 Link Previews: título/descripción con Baileys\n` +
+                                          `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                           `📚 Data Store: ACTIVADO (extracción local)\n` +
                                           `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                           `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
@@ -1612,7 +1638,7 @@ async function iniciarWhatsApp() {
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
                                       `✍️  Typing adaptativo: activado\n` +
-                                      `🔗 Link Previews: título/descripción con Baileys\n` +
+                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
                                       `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
