@@ -1355,7 +1355,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (VERSIÓN CORREGIDA)
+// INICIAR CONEXIÓN WHATSAPP (CORREGIDO)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
@@ -1449,16 +1449,13 @@ async function iniciarWhatsApp() {
             } catch (e) {}
         });
 
-        // ============================================
-        // SECCIÓN CORREGIDA: Código de emparejamiento
-        // ============================================
         if (!sock.authState.creds.registered) {
             console.log('📱 PRIMERA CONFIGURACIÓN\n');
             const numero = await pedirNumeroSilencioso();
             console.log(`\n🔄 Solicitando código...`);
             
+            // >>> CAMBIO 1: ELIMINADO EL setTimeout <<<
             try {
-                // Sin setTimeout - ejecutar inmediatamente
                 const codigo = await sock.requestPairingCode(numero);
                 console.log('\n====================================');
                 console.log('🔐 CÓDIGO:', codigo);
@@ -1470,23 +1467,11 @@ async function iniciarWhatsApp() {
                 console.log('⏳ Esperando confirmación... (puede tomar unos segundos)');
             } catch (error) {
                 console.log('❌ Error al generar código:', error.message);
-                console.log('🔄 Reintentando en 5 segundos...');
-                // Dejar que Baileys reconecte automáticamente
-guardarLogLocal('⏱️ Esperando reconexión automática de Baileys...');
-                return;
             }
         }
 
-        // ============================================
-        // EVENTO DE CONEXIÓN CORREGIDO
-        // ============================================
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                console.log('📱 Escanea este código QR:');
-                console.log(qr);
-            }
+            const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
@@ -1513,6 +1498,7 @@ guardarLogLocal('⏱️ Esperando reconexión automática de Baileys...');
                 
                 if (shouldReconnect) {
                     guardarLogLocal('🔄 Reconectando...');
+                    // >>> CAMBIO 2: ELIMINADO EL setTimeout que reiniciaba <<<
                     // Dejar que Baileys reconecte automáticamente
                 } else {
                     guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
