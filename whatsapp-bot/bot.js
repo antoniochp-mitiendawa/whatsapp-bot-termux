@@ -1498,7 +1498,9 @@ async function iniciarWhatsApp() {
                 
                 if (shouldReconnect) {
                     guardarLogLocal('🔄 Reconectando...');
-                    setTimeout(() => iniciarWhatsApp(), 5000);
+                    // >>> SOLO CAMBIÉ ESTA LÍNEA - ANTES: setTimeout(() => iniciarWhatsApp(), 5000);
+                    // AHORA: Dejamos que Baileys reconecte automáticamente
+                    guardarLogLocal('⏱️ Esperando reconexión automática de Baileys...');
                 } else {
                     guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
                 }
