@@ -1355,7 +1355,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP
+// INICIAR CONEXIÓN WHATSAPP (VERSIÓN CORREGIDA)
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
@@ -1401,16 +1401,16 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
-const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
-
-let browserConfig;
-if (!existeSesion) {
-    browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
-    console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
-} else {
-    browserConfig = Browsers.macOS("Desktop");
-    console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
-}
+        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
+        
+        let browserConfig;
+        if (!existeSesion) {
+            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
+            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
+        } else {
+            browserConfig = Browsers.macOS("Desktop");
+            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
+        }
 
         // ============================================
         // CONFIGURACIÓN DEL SOCKET
@@ -1449,29 +1449,43 @@ if (!existeSesion) {
             } catch (e) {}
         });
 
+        // ============================================
+        // SECCIÓN CORREGIDA: Código de emparejamiento
+        // ============================================
         if (!sock.authState.creds.registered) {
             console.log('📱 PRIMERA CONFIGURACIÓN\n');
             const numero = await pedirNumeroSilencioso();
             console.log(`\n🔄 Solicitando código...`);
             
-            setTimeout(async () => {
-                try {
-                    const codigo = await sock.requestPairingCode(numero);
-                    console.log('\n====================================');
-                    console.log('🔐 CÓDIGO:', codigo);
-                    console.log('====================================');
-                    console.log('1. Abre WhatsApp');
-                    console.log('2. 3 puntos → Dispositivos vinculados');
-                    console.log('3. Vincular con número');
-                    console.log('4. Ingresa el código\n');
-                } catch (error) {
-                    console.log('❌ Error al generar código');
-                }
-            }, 2000);
+            try {
+                // Sin setTimeout - ejecutar inmediatamente
+                const codigo = await sock.requestPairingCode(numero);
+                console.log('\n====================================');
+                console.log('🔐 CÓDIGO:', codigo);
+                console.log('====================================');
+                console.log('1. Abre WhatsApp');
+                console.log('2. 3 puntos → Dispositivos vinculados');
+                console.log('3. Vincular con número');
+                console.log('4. Ingresa el código\n');
+                console.log('⏳ Esperando confirmación... (puede tomar unos segundos)');
+            } catch (error) {
+                console.log('❌ Error al generar código:', error.message);
+                console.log('🔄 Reintentando en 5 segundos...');
+                setTimeout(() => iniciarWhatsApp(), 5000);
+                return;
+            }
         }
 
+        // ============================================
+        // EVENTO DE CONEXIÓN CORREGIDO
+        // ============================================
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr) {
+                console.log('📱 Escanea este código QR:');
+                console.log(qr);
+            }
 
             if (connection === 'open') {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
@@ -1498,9 +1512,7 @@ if (!existeSesion) {
                 
                 if (shouldReconnect) {
                     guardarLogLocal('🔄 Reconectando...');
-                    // >>> SOLO CAMBIÉ ESTA LÍNEA - ANTES: setTimeout(() => iniciarWhatsApp(), 5000);
-                    // AHORA: Dejamos que Baileys reconecte automáticamente
-                    guardarLogLocal('⏱️ Esperando reconexión automática de Baileys...');
+                    // Dejar que Baileys reconecte automáticamente
                 } else {
                     guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
                 }
