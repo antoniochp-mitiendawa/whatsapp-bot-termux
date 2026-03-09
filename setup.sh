@@ -33,7 +33,7 @@ cd whatsapp-bot
 echo "📦 PASO 6: Preparando proyecto..."
 npm init -y
 
-# PASO 8: Instalar Baileys (VERSIÓN ESPECÍFICA)
+# PASO 8: Instalar Baileys (SOLO CAMBIO: versión específica)
 echo "📦 PASO 7: Instalando Baileys..."
 npm install @whiskeysockets/baileys@6.7.0
 
