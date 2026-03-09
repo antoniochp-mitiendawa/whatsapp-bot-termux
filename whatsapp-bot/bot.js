@@ -1401,16 +1401,16 @@ async function iniciarWhatsApp() {
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
 
-        const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
-        
-        let browserConfig;
-        if (!existeSesion) {
-            browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
-            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
-        } else {
-            browserConfig = Browsers.macOS("Desktop");
-            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
-        }
+const existeSesion = fs.existsSync(path.join(CONFIG.carpeta_sesion, 'creds.json'));
+
+let browserConfig;
+if (!existeSesion) {
+    browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
+    console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
+} else {
+    browserConfig = Browsers.macOS("Desktop");
+    console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
+}
 
         // ============================================
         // CONFIGURACIÓN DEL SOCKET
