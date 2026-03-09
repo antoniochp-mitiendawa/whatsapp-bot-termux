@@ -1355,7 +1355,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP (CORREGIDO)
+// INICIAR CONEXIÓN WHATSAPP
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
@@ -1454,20 +1454,20 @@ async function iniciarWhatsApp() {
             const numero = await pedirNumeroSilencioso();
             console.log(`\n🔄 Solicitando código...`);
             
-            // >>> CAMBIO 1: ELIMINADO EL setTimeout <<<
-            try {
-                const codigo = await sock.requestPairingCode(numero);
-                console.log('\n====================================');
-                console.log('🔐 CÓDIGO:', codigo);
-                console.log('====================================');
-                console.log('1. Abre WhatsApp');
-                console.log('2. 3 puntos → Dispositivos vinculados');
-                console.log('3. Vincular con número');
-                console.log('4. Ingresa el código\n');
-                console.log('⏳ Esperando confirmación... (puede tomar unos segundos)');
-            } catch (error) {
-                console.log('❌ Error al generar código:', error.message);
-            }
+            setTimeout(async () => {
+                try {
+                    const codigo = await sock.requestPairingCode(numero);
+                    console.log('\n====================================');
+                    console.log('🔐 CÓDIGO:', codigo);
+                    console.log('====================================');
+                    console.log('1. Abre WhatsApp');
+                    console.log('2. 3 puntos → Dispositivos vinculados');
+                    console.log('3. Vincular con número');
+                    console.log('4. Ingresa el código\n');
+                } catch (error) {
+                    console.log('❌ Error al generar código');
+                }
+            }, 2000);
         }
 
         sock.ev.on('connection.update', async (update) => {
@@ -1498,8 +1498,7 @@ async function iniciarWhatsApp() {
                 
                 if (shouldReconnect) {
                     guardarLogLocal('🔄 Reconectando...');
-                    // >>> CAMBIO 2: ELIMINADO EL setTimeout que reiniciaba <<<
-                    // Dejar que Baileys reconecte automáticamente
+                    setTimeout(() => iniciarWhatsApp(), 5000);
                 } else {
                     guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
                 }
