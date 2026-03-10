@@ -51,10 +51,14 @@ npm install pino
 npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
-# PASO 5: Crear carpeta de logs
+# PASO 5: CORRECCIÓN - Instalar long versión compatible
+echo "📦 PASO 4: Aplicando correcciones..."
+npm install long@4.0.0 --save
+
+# PASO 6: Crear carpeta de logs
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
 
-# PASO 6: Crear script de reinicio automático
+# PASO 7: Crear script de reinicio automático
 echo "🤖 Creando script de reinicio automático..."
 cat > iniciar.sh << 'EOF'
 #!/bin/bash
@@ -87,7 +91,7 @@ echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
 
-# PASO 7: Preguntar si quiere iniciar
+# PASO 8: Preguntar si quiere iniciar
 echo "🤖 El bot ya está instalado"
 echo ""
 echo "¿Quieres iniciar el bot AHORA? (con reinicio automático)"
