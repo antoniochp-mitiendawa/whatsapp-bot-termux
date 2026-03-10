@@ -9,7 +9,7 @@ echo ""
 echo "📦 PASO 1: Instalando programas necesarios..."
 pkg update -y
 pkg install git -y
-pkg install nodejs -y
+pkg install nodejs-lts -y
 pkg install yarn -y
 pkg install cronie termux-services -y
 pkg install wget -y
@@ -51,39 +51,8 @@ npm install pino
 npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
-# PASO 5: CORRECCIÓN - Instalar long versión compatible
-echo "📦 PASO 4: Aplicando correcciones..."
-npm install long@4.0.0 --save
-
-# PASO 6: Crear carpeta de logs
+# PASO 5: Crear carpeta de logs
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
-
-# PASO 7: Crear script de reinicio automático
-echo "🤖 Creando script de reinicio automático..."
-cat > iniciar.sh << 'EOF'
-#!/bin/bash
-
-while true; do
-    echo "===================================="
-    echo "🚀 INICIANDO BOT WHATSAPP"
-    echo "===================================="
-    echo ""
-    
-    node bot.js
-    
-    echo ""
-    echo "❌ EL BOT SE DETUVO O DESCONECTÓ"
-    echo "===================================="
-    echo "Reiniciando en 5 segundos..."
-    echo "Presiona Ctrl+C para salir"
-    echo "===================================="
-    echo ""
-    
-    sleep 5
-done
-EOF
-
-chmod +x iniciar.sh
 
 echo ""
 echo "===================================="
@@ -91,10 +60,10 @@ echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
 
-# PASO 8: Preguntar si quiere iniciar
+# PASO 6: Preguntar si quiere iniciar
 echo "🤖 El bot ya está instalado"
 echo ""
-echo "¿Quieres iniciar el bot AHORA? (con reinicio automático)"
+echo "¿Quieres iniciar el bot AHORA?"
 echo "Escribe 1 y presiona Enter para INICIAR"
 echo "Escribe 2 y presiona Enter para SALIR"
 echo ""
@@ -102,14 +71,15 @@ read OPCION
 
 if [ "$OPCION" == "1" ]; then
     echo ""
-    echo "🚀 INICIANDO BOT (con reinicio automático)..."
+    echo "🚀 INICIANDO BOT..."
     echo "======================"
     echo ""
-    ./iniciar.sh
+    cd whatsapp-bot
+    node bot.js
 else
     echo ""
     echo "📝 Para iniciar el bot después:"
     echo "cd whatsapp-bot-termux/whatsapp-bot"
-    echo "./iniciar.sh"
+    echo "node bot.js"
     echo ""
 fi
