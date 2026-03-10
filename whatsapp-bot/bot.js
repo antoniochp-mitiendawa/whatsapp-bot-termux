@@ -1355,8 +1355,14 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 }
 
 // ============================================
-// INICIAR CONEXIÓN WHATSAPP
+// INICIAR CONEXIÓN WHATSAPP (VERSIÓN CON RECONEXIÓN INTELIGENTE)
 // ============================================
+
+// Variables para control de reconexión
+let intentosReconexion = 0;
+const MAX_INTENTOS = 10;
+const TIEMPOS_ESPERA = [5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560]; // segundos
+
 async function iniciarWhatsApp() {
     console.log('====================================');
     console.log('🤖 BOT WHATSAPP - VERSIÓN 41.0 (SPINTEX LIMPIO + TABLA DE ARCHIVOS)');
@@ -1476,6 +1482,8 @@ async function iniciarWhatsApp() {
             if (connection === 'open') {
                 console.log('\n✅ CONECTADO A WHATSAPP\n');
                 guardarLogLocal('CONEXIÓN EXITOSA');
+                // Reiniciamos contador de intentos al conectar exitosamente
+                intentosReconexion = 0;
                 
                 limpiarStoreAntiguo();
                 
@@ -1497,8 +1505,20 @@ async function iniciarWhatsApp() {
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 if (shouldReconnect) {
-                    guardarLogLocal('🔄 Reconectando...');
-                    setTimeout(() => iniciarWhatsApp(), 5000);
+                    intentosReconexion++;
+                    
+                    if (intentosReconexion <= MAX_INTENTOS) {
+                        const tiempoEspera = TIEMPOS_ESPERA[intentosReconexion - 1] || TIEMPOS_ESPERA[TIEMPOS_ESPERA.length - 1];
+                        guardarLogLocal(`🔄 Intento ${intentosReconexion}/${MAX_INTENTOS} - Reconectando en ${tiempoEspera} segundos...`);
+                        
+                        setTimeout(() => {
+                            guardarLogLocal('🔄 Ejecutando reconexión...');
+                            iniciarWhatsApp();
+                        }, tiempoEspera * 1000);
+                    } else {
+                        guardarLogLocal(`❌ Se alcanzó el máximo de ${MAX_INTENTOS} intentos de reconexión.`);
+                        guardarLogLocal('📝 Para reiniciar manualmente ejecuta: node bot.js');
+                    }
                 } else {
                     guardarLogLocal('🚫 Sesión cerrada. Borra carpeta sesion_whatsapp');
                 }
