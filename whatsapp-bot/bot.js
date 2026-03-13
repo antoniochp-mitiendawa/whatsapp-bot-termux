@@ -1,4 +1,4 @@
-¿// ============================================
+// ============================================
 // BOT DE WHATSAPP PARA TERMUX
 // Versión: 43.0 - SPINTEX LIMPIO + TABLA DE ARCHIVOS + MÚLTIPLES ARCHIVOS
 // + MEJORA 1: Keep-Alive cada 25 segundos
