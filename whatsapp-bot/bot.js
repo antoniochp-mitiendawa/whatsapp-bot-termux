@@ -1,6 +1,6 @@
-// ============================================
+¿// ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 41.0 - SPINTEX LIMPIO + TABLA DE ARCHIVOS
+// Versión: 43.0 - SPINTEX LIMPIO + TABLA DE ARCHIVOS + MÚLTIPLES ARCHIVOS
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
@@ -8,6 +8,12 @@
 // + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados con setTimeout)
 // + MEJORA: Al actualizar, reprograma todos los envíos
 // + MEJORA: 1 cron job a las 6am solo para actualizar agenda
+// + VERSIÓN 43.0: Múltiples archivos por producto
+//   - Busca TODOS los archivos que coincidan con el nombre del producto
+//   - Los ordena: imágenes primero, luego videos, luego audios, luego documentos
+//   - El texto del mensaje SOLO va con la PRIMERA imagen
+//   - Los archivos siguientes llevan textos personalizados por tipo
+//   - Delay inteligente entre grupos que considera el tiempo real de envío
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -42,7 +48,15 @@ const CONFIG = {
     horarios_actualizacion: ['06:00'], // SOLO 6am para actualización automática
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-    tiempo_espera_grupos: 30000
+    tiempo_espera_grupos: 30000,
+    // NUEVA CONFIGURACIÓN PARA MÚLTIPLES ARCHIVOS
+    delay_entre_archivos: 3, // segundos entre cada archivo del mismo grupo
+    textos_por_tipo: {
+        imagen: '', // El texto principal ya se usa con la primera imagen
+        video: '🎬 Te dejo un video de *[PRODUCTO]*',
+        audio: '🔊 Escucha más detalles de *[PRODUCTO]*',
+        documento: '📄 Aquí tienes más información de *[PRODUCTO]*'
+    }
 };
 
 // ============================================
@@ -133,16 +147,18 @@ async function obtenerMetadataGrupoConCache(sock, groupId) {
 }
 
 // ============================================
-// FUNCIÓN PARA BUSCAR ARCHIVO MULTIMEDIA (CORREGIDA)
+// NUEVA FUNCIÓN: Buscar TODOS los archivos multimedia que coincidan con un nombre
 // ============================================
-function buscarArchivoMultimedia(nombreArchivo) {
+function buscarTodosLosArchivosMultimedia(nombreBase) {
     try {
-        if (!nombreArchivo || nombreArchivo.trim() === '') {
-            return null;
+        if (!nombreBase || nombreBase.trim() === '') {
+            return [];
         }
 
-        const nombreLimpio = nombreArchivo.trim();
-        guardarLogLocal(`   🔍 Buscando archivo: "${nombreLimpio}"`);
+        const nombreLimpio = nombreBase.trim().toLowerCase();
+        guardarLogLocal(`   🔍 Buscando TODOS los archivos que contengan: "${nombreLimpio}"`);
+        
+        const archivosEncontrados = [];
 
         function buscarRecursivo(directorio) {
             try {
@@ -153,90 +169,162 @@ function buscarArchivoMultimedia(nombreArchivo) {
                     const estadistica = fs.statSync(rutaCompleta);
                     
                     if (estadistica.isDirectory()) {
-                        const encontrado = buscarRecursivo(rutaCompleta);
-                        if (encontrado) return encontrado;
+                        buscarRecursivo(rutaCompleta);
                     } else {
-                        const nombreSinExtension = path.parse(archivo).name;
-                        // Comparación exacta del nombre base (sin extensión)
-                        if (nombreSinExtension === nombreLimpio) {
-                            guardarLogLocal(`   ✅ Archivo encontrado: ${rutaCompleta}`);
-                            return {
+                        const nombreSinExtension = path.parse(archivo).name.toLowerCase();
+                        // Buscar si el nombre del archivo CONTIENE el nombre base
+                        if (nombreSinExtension.includes(nombreLimpio)) {
+                            archivosEncontrados.push({
                                 ruta: rutaCompleta,
                                 nombre: archivo,
+                                nombreBase: path.parse(archivo).name,
                                 extension: path.extname(archivo).toLowerCase()
-                            };
+                            });
                         }
                     }
                 }
             } catch (error) {}
-            return null;
         }
 
-        return buscarRecursivo(CONFIG.carpeta_multimedia);
+        buscarRecursivo(CONFIG.carpeta_multimedia);
+        
+        // Ordenar por tipo: imágenes primero, luego videos, luego audios, luego documentos
+        const ordenPrioridad = {
+            'imagen': 1,
+            'video': 2,
+            'audio': 3,
+            'documento': 4
+        };
+        
+        archivosEncontrados.sort((a, b) => {
+            const tipoA = obtenerTipoArchivo(a.extension);
+            const tipoB = obtenerTipoArchivo(b.extension);
+            return (ordenPrioridad[tipoA] || 5) - (ordenPrioridad[tipoB] || 5);
+        });
+        
+        guardarLogLocal(`   ✅ Encontrados ${archivosEncontrados.length} archivos para "${nombreLimpio}"`);
+        archivosEncontrados.forEach((arch, idx) => {
+            guardarLogLocal(`      ${idx+1}. ${arch.nombre} (${obtenerTipoArchivo(arch.extension)})`);
+        });
+        
+        return archivosEncontrados;
         
     } catch (error) {
-        guardarLogLocal(`   ⚠️ Error buscando archivo: ${error.message}`);
-        return null;
+        guardarLogLocal(`   ⚠️ Error buscando archivos: ${error.message}`);
+        return [];
     }
 }
 
 // ============================================
-// FUNCIÓN PARA ENVIAR ARCHIVO MULTIMEDIA
+// NUEVA FUNCIÓN: Obtener tipo de archivo por extensión
 // ============================================
-async function enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio) {
+function obtenerTipoArchivo(extension) {
+    if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
+        return 'imagen';
+    }
+    else if (['.mp4', '.avi', '.mov', '.mkv', '.webm'].includes(extension)) {
+        return 'video';
+    }
+    else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac', '.opus'].includes(extension)) {
+        return 'audio';
+    }
+    else {
+        return 'documento';
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Obtener texto personalizado por tipo de archivo
+// ============================================
+function obtenerTextoPorTipo(tipo, nombreProducto) {
+    let texto = CONFIG.textos_por_tipo[tipo] || '';
+    return texto.replace('[PRODUCTO]', nombreProducto);
+}
+
+// ============================================
+// FUNCIÓN MODIFICADA: ENVIAR MÚLTIPLES ARCHIVOS MULTIMEDIA
+// ============================================
+async function enviarMultiplesArchivos(sock, id_grupo, archivos, textoPrincipal, nombreProducto) {
     try {
-        const extension = archivoInfo.extension;
-        const buffer = fs.readFileSync(archivoInfo.ruta);
+        let tiempoTotalEnvio = 0;
+        let primerArchivo = true;
         
-        if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
-            guardarLogLocal(`   🖼️ Enviando imagen: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                image: buffer,
-                caption: textoLimpio || ''
-            });
-            return 'IMAGEN ENVIADA';
-        }
-        else if (['.mp4', '.avi', '.mov', '.mkv'].includes(extension)) {
-            guardarLogLocal(`   🎬 Enviando video: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                video: buffer,
-                caption: textoLimpio || ''
-            });
-            return 'VIDEO ENVIADO';
-        }
-        else if (['.mp3', '.ogg', '.m4a', '.wav', '.aac'].includes(extension)) {
-            guardarLogLocal(`   🎵 Enviando audio: ${archivoInfo.nombre}`);
-            let mimetype = 'audio/mpeg';
-            if (extension === '.ogg') mimetype = 'audio/ogg';
-            if (extension === '.m4a') mimetype = 'audio/mp4';
-            if (extension === '.wav') mimetype = 'audio/wav';
+        for (const archivo of archivos) {
+            const tipo = obtenerTipoArchivo(archivo.extension);
+            const buffer = fs.readFileSync(archivo.ruta);
             
-            await sock.sendMessage(id_grupo, {
-                audio: buffer,
-                mimetype: mimetype
-            });
-            
-            if (textoLimpio && textoLimpio.trim() !== '') {
-                guardarLogLocal(`   📝 Enviando texto aparte para el audio`);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                await sock.sendMessage(id_grupo, { text: textoLimpio });
+            // Determinar qué texto usar
+            let textoEnvio = '';
+            if (primerArchivo && tipo === 'imagen') {
+                // La primera imagen lleva el texto principal del mensaje
+                textoEnvio = textoPrincipal;
+                guardarLogLocal(`   📝 Enviando texto principal con primera imagen`);
+            } else {
+                // Los demás archivos llevan texto personalizado por tipo
+                textoEnvio = obtenerTextoPorTipo(tipo, nombreProducto);
+                guardarLogLocal(`   📝 Usando texto para ${tipo}: "${textoEnvio}"`);
             }
-            return 'AUDIO ENVIADO' + (textoLimpio ? ' + TEXTO' : '');
+            
+            // Enviar según el tipo
+            const inicioEnvio = Date.now();
+            
+            if (tipo === 'imagen') {
+                guardarLogLocal(`   🖼️ Enviando imagen: ${archivo.nombre}`);
+                await sock.sendMessage(id_grupo, {
+                    image: buffer,
+                    caption: textoEnvio || ''
+                });
+            }
+            else if (tipo === 'video') {
+                guardarLogLocal(`   🎬 Enviando video: ${archivo.nombre}`);
+                await sock.sendMessage(id_grupo, {
+                    video: buffer,
+                    caption: textoEnvio || ''
+                });
+            }
+            else if (tipo === 'audio') {
+                guardarLogLocal(`   🎵 Enviando audio: ${archivo.nombre}`);
+                let mimetype = 'audio/mpeg';
+                if (archivo.extension === '.ogg') mimetype = 'audio/ogg';
+                if (archivo.extension === '.m4a') mimetype = 'audio/mp4';
+                if (archivo.extension === '.wav') mimetype = 'audio/wav';
+                
+                await sock.sendMessage(id_grupo, {
+                    audio: buffer,
+                    mimetype: mimetype,
+                    caption: textoEnvio || '' // Algunos audios permiten caption
+                });
+            }
+            else {
+                guardarLogLocal(`   📄 Enviando documento: ${archivo.nombre}`);
+                await sock.sendMessage(id_grupo, {
+                    document: buffer,
+                    fileName: archivo.nombre,
+                    mimetype: 'application/octet-stream',
+                    caption: textoEnvio || ''
+                });
+            }
+            
+            const duracionEnvio = (Date.now() - inicioEnvio) / 1000;
+            tiempoTotalEnvio += duracionEnvio;
+            
+            guardarLogLocal(`      ✅ Enviado (${duracionEnvio.toFixed(1)}s)`);
+            
+            // Esperar entre archivos (excepto después del último)
+            if (archivos.indexOf(archivo) < archivos.length - 1) {
+                guardarLogLocal(`   ⏱️ Esperando ${CONFIG.delay_entre_archivos}s antes del siguiente archivo...`);
+                await new Promise(resolve => setTimeout(resolve, CONFIG.delay_entre_archivos * 1000));
+                tiempoTotalEnvio += CONFIG.delay_entre_archivos;
+            }
+            
+            primerArchivo = false;
         }
-        else {
-            guardarLogLocal(`   📄 Enviando documento: ${archivoInfo.nombre}`);
-            await sock.sendMessage(id_grupo, {
-                document: buffer,
-                fileName: archivoInfo.nombre,
-                mimetype: 'application/octet-stream',
-                caption: textoLimpio || ''
-            });
-            return 'DOCUMENTO ENVIADO';
-        }
+        
+        return tiempoTotalEnvio;
         
     } catch (error) {
-        guardarLogLocal(`   ❌ Error enviando archivo: ${error.message}`);
-        return 'ERROR: ' + error.message.substring(0, 50);
+        guardarLogLocal(`   ❌ Error enviando múltiples archivos: ${error.message}`);
+        return 0;
     }
 }
 
@@ -747,10 +835,10 @@ async function actualizarCacheProductos(url) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (CORREGIDA CON TRIM)
+// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (AHORA USA MÚLTIPLES ARCHIVOS)
 // ============================================
-function buscarArchivoPorProducto(nombreProducto) {
-    if (!nombreProducto || productosCache.length === 0) return null;
+function buscarArchivosPorProducto(nombreProducto) {
+    if (!nombreProducto || productosCache.length === 0) return [];
     
     // Buscar el producto exacto en el caché
     const producto = productosCache.find(p => 
@@ -758,14 +846,16 @@ function buscarArchivoPorProducto(nombreProducto) {
     );
     
     if (producto) {
-        // El archivo viene con paréntesis, los eliminamos y aplicamos trim para quitar espacios extras
+        // El archivo viene con paréntesis, los eliminamos y aplicamos trim
         const archivoLimpio = producto.archivo.replace(/^\(|\)$/g, '').trim();
-        guardarLogLocal(`   📦 Producto encontrado: "${producto.producto}" → archivo: "${archivoLimpio}"`);
-        return archivoLimpio;
+        guardarLogLocal(`   📦 Producto encontrado: "${producto.producto}" → archivo base: "${archivoLimpio}"`);
+        
+        // Buscar TODOS los archivos que contengan este nombre base
+        return buscarTodosLosArchivosMultimedia(archivoLimpio);
     }
     
     guardarLogLocal(`   ⚠️ Producto no encontrado en caché: "${nombreProducto}"`);
-    return null;
+    return [];
 }
 
 // ============================================
@@ -832,79 +922,62 @@ function procesarSpinEnMensaje(texto) {
 }
 
 // ============================================
-// FUNCIÓN MODIFICADA: ENVIAR MENSAJE (con tabla de correspondencia CORREGIDA)
+// FUNCIÓN MODIFICADA: ENVIAR MENSAJE (AHORA CON MÚLTIPLES ARCHIVOS)
 // ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
         if (!id_grupo || !id_grupo.includes('@g.us')) {
-            return 'ERROR: ID inválido';
+            return { resultado: 'ERROR: ID inválido', tiempo: 0 };
         }
+        
+        const inicioEnvio = Date.now();
         
         // Aplicar procesamiento de spin al mensaje
         const mensajeProcesado = procesarSpinEnMensaje(mensajeOriginal);
         
-        // CORRECCIÓN CRÍTICA PARA BAILEYS:
         // Forzar que el mensaje sea tratado como string plano
         const mensajeFinal = String(mensajeProcesado);
         
-        // NUEVO: Buscar archivo por nombre de producto
+        // Extraer nombre del producto
         const nombreProducto = extraerNombreProducto(mensajeFinal);
-        let archivoEnviado = false;
         
         if (nombreProducto) {
             guardarLogLocal(`   🔍 Producto detectado en mensaje: "${nombreProducto}"`);
-            const nombreArchivo = buscarArchivoPorProducto(nombreProducto);
             
-            if (nombreArchivo) {
-                guardarLogLocal(`   📦 Buscando archivo: "${nombreArchivo}" en carpeta multimedia`);
-                const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
+            // Buscar TODOS los archivos para este producto
+            const archivos = buscarArchivosPorProducto(nombreProducto);
+            
+            if (archivos.length > 0) {
+                guardarLogLocal(`   📦 Encontrados ${archivos.length} archivos para enviar`);
                 
-                if (archivoInfo) {
-                    guardarLogLocal(`   ✅ Archivo encontrado: ${archivoInfo.nombre}`);
-                    
-                    // Limpiar el texto de posibles paréntesis residuales
-                    const textoLimpio = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
-                    
-                    // Enviar archivo multimedia con el texto como caption o por separado según el tipo
-                    const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio);
-                    archivoEnviado = true;
-                    return resultado;
-                } else {
-                    guardarLogLocal(`   ⚠️ Archivo no encontrado: "${nombreArchivo}" en la carpeta multimedia`);
-                }
-            }
-        }
-        
-        // Verificar si hay referencia a archivo multimedia en el texto (por compatibilidad)
-        const regexArchivo = /\(([^)]+)\)/;
-        const match = mensajeFinal.match(regexArchivo);
-        
-        if (match && !archivoEnviado) {
-            const nombreArchivo = match[1];
-            // Limpiar el texto quitando la referencia al archivo
-            const textoLimpio = mensajeFinal.replace(regexArchivo, '').trim();
-            
-            guardarLogLocal(`   🔍 Buscando archivo por referencia directa: "${nombreArchivo}"`);
-            const archivoInfo = buscarArchivoMultimedia(nombreArchivo);
-            
-            if (archivoInfo) {
-                const resultado = await enviarArchivoMultimedia(sock, id_grupo, archivoInfo, textoLimpio);
-                return resultado;
+                // Limpiar el texto de posibles paréntesis residuales
+                const textoLimpio = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
+                
+                // Enviar múltiples archivos
+                const tiempoEnvio = await enviarMultiplesArchivos(sock, id_grupo, archivos, textoLimpio, nombreProducto);
+                
+                return {
+                    resultado: `MÚLTIPLES ARCHIVOS (${archivos.length})`,
+                    tiempo: (Date.now() - inicioEnvio) / 1000
+                };
             } else {
-                guardarLogLocal(`   ⚠️ Archivo no encontrado por referencia directa: "${nombreArchivo}"`);
-                // Enviar como texto simple
-                await sock.sendMessage(id_grupo, { text: mensajeFinal });
-                return 'TEXTO ENVIADO (archivo no encontrado)';
+                guardarLogLocal(`   ⚠️ No se encontraron archivos para "${nombreProducto}"`);
             }
         }
         
-        // Si no hay archivo, enviar solo el texto
+        // Si no hay archivos, enviar solo el texto
         await sock.sendMessage(id_grupo, { text: mensajeFinal });
-        return 'TEXTO ENVIADO';
+        return {
+            resultado: 'TEXTO ENVIADO',
+            tiempo: (Date.now() - inicioEnvio) / 1000
+        };
         
     } catch (error) {
         guardarLogLocal(`   ❌ Error en envío: ${error.message}`);
-        return 'ERROR: ' + error.message.substring(0, 50);
+        return {
+            resultado: 'ERROR: ' + error.message.substring(0, 50),
+            tiempo: 0
+        };
     }
 }
 
@@ -919,7 +992,7 @@ function obtenerDelayAleatorio() {
 }
 
 // ============================================
-// VERIFICAR MENSAJES PENDIENTES POR PESTAÑA
+// FUNCIÓN MODIFICADA: VERIFICAR MENSAJES PENDIENTES CON DELAY INTELIGENTE
 // ============================================
 async function verificarMensajesLocales(sock) {
     try {
@@ -954,6 +1027,9 @@ async function verificarMensajesLocales(sock) {
         guardarLogLocal(`⏰ HORA DE ENVÍO DETECTADA: ${horaActual} - Procesando ${pestanasAHora.length} pestañas`);
         imagenesUsadasEnLote.clear();
 
+        const tiempoInicioLote = Date.now();
+        let ultimoTiempoEnvio = 0;
+
         for (const pestana of pestanasAHora) {
             guardarLogLocal(`📊 Pestaña "${pestana.nombre}" - Enviando ${pestana.grupos.length} mensajes (horario: ${pestana.horario})`);
 
@@ -966,21 +1042,31 @@ async function verificarMensajesLocales(sock) {
 
                 guardarLogLocal(`   📤 Enviando a: ${grupo.nombre || grupo.id}`);
                 
-                const delaySegundos = obtenerDelayAleatorio();
+                // Calcular delay inteligente basado en el tiempo real del envío anterior
+                const delayMinimoSegundos = obtenerDelayAleatorio();
+                const tiempoDesdeUltimoEnvio = (Date.now() - ultimoTiempoEnvio) / 1000;
                 
-                await simularTyping(sock, grupo.id, delaySegundos * 0.8);
+                let tiempoEspera = 0;
+                if (ultimoTiempoEnvio > 0 && tiempoDesdeUltimoEnvio < delayMinimoSegundos) {
+                    tiempoEspera = delayMinimoSegundos - tiempoDesdeUltimoEnvio;
+                    guardarLogLocal(`   ⏱️ Delay inteligente: esperando ${tiempoEspera.toFixed(1)}s adicionales para cumplir mínimo ${delayMinimoSegundos}s`);
+                    await new Promise(resolve => setTimeout(resolve, tiempoEspera * 1000));
+                }
                 
-                const estado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
+                await simularTyping(sock, grupo.id, delayMinimoSegundos * 0.5);
                 
-                const restante = delaySegundos * 0.2 * 1000;
-                await new Promise(resolve => setTimeout(resolve, restante));
+                const resultado = await enviarMensaje(sock, grupo.id, grupo.mensaje);
                 
-                guardarLogLocal(`      Resultado: ${estado}`);
+                ultimoTiempoEnvio = Date.now();
+                guardarLogLocal(`      Resultado: ${resultado.resultado} (${resultado.tiempo.toFixed(1)}s)`);
             }
             
             guardarLogLocal(`✅ Pestaña "${pestana.nombre}" completada`);
         }
 
+        const tiempoTotalLote = (Date.now() - tiempoInicioLote) / 1000;
+        guardarLogLocal(`✅ Lote completado en ${tiempoTotalLote.toFixed(1)} segundos`);
+        
         limpiarCacheImagenes();
 
     } catch (error) {
@@ -1452,7 +1538,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 41.0 (SPINTEX LIMPIO + TABLA DE ARCHIVOS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 43.0 (MÚLTIPLES ARCHIVOS + DELAY INTELIGENTE)');
     console.log('====================================\n');
     console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
     console.log('✍️  Typing adaptativo activado');
@@ -1461,7 +1547,6 @@ async function iniciarWhatsApp() {
     console.log('🔄 Sincronización automática con Google Sheets: al iniciar y 6am');
     console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
     console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
-    console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
     console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
     console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
     console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
@@ -1471,16 +1556,15 @@ async function iniciarWhatsApp() {
     console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
     console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
     console.log('📝 Logs locales (carpeta logs/)');
-    console.log('🆕 Comando: "listagrupos" - Exporta TODOS los grupos (con caché) a CSV + Sheets');
     console.log('🎲 **SPINTEX Y SPINEMOJI CORREGIDOS PARA BAILEYS**');
-    console.log('   - {spin|opción1|opción2} → Elige aleatoriamente');
-    console.log('   - {emoji|😀|😎|🥳} o {👋|😊|✨} → Elige emoji aleatorio');
-    console.log('📦 **NUEVO: TABLA DE CORRESPONDENCIA PRODUCTO-ARCHIVO**');
-    console.log('   - Los archivos se envían automáticamente según el producto elegido');
-    console.log('⚡ **MODO AHORRO DE BATERÍA ACTIVADO**');
-    console.log('   - ✅ Ya NO se verifica cada minuto');
-    console.log('   - ✅ Solo envía en horarios programados con setTimeout');
-    console.log('   - ✅ Al actualizar, reprograma todos los horarios\n');
+    console.log('📦 **NUEVO: MÚLTIPLES ARCHIVOS POR PRODUCTO**');
+    console.log('   - Busca TODOS los archivos que coincidan con el nombre');
+    console.log('   - Orden: imágenes → videos → audios → documentos');
+    console.log('   - Texto personalizado para cada tipo de archivo');
+    console.log('⏱️ **NUEVO: DELAY INTELIGENTE ENTRE GRUPOS**');
+    console.log('   - Mide el tiempo real de cada envío');
+    console.log('   - Ajusta la espera automáticamente');
+    console.log('   - No acumula retrasos en el día\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1686,27 +1770,29 @@ async function iniciarWhatsApp() {
                                 });
                             }
                             
-                            let mensaje = `📊 *ESTADO DEL BOT - MODO AHORRO*\n\n` +
-                                          `⏰ MODO: setTimeout (solo horarios programados)\n` +
+                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 43.0*\n\n` +
+                                          `⏰ MODO: setTimeout + Delay inteligente\n` +
                                           `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                           `📋 Grupos totales: ${total}\n` +
                                           `✅ Grupos activos: ${activos}\n` +
                                           `📌 Pestañas: ${pestanas}\n` +
                                           `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
-                                          `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                          `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
+                                          `📦 Múltiples archivos: ACTIVADO\n` +
+                                          `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
                                           `✍️  Typing adaptativo: activado\n` +
                                           `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                           `📚 Data Store: ACTIVADO (extracción local)\n` +
                                           `🔄 Actualización automática: 6:00 AM\n` +
                                           `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
                                           `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                          `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                          `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
                                           `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                           `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
                                           `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
                                           `🔄 Consulta masiva: RESTAURADA\n` +
                                           `🗑️  Limpieza automática: activada\n` +
-                                          `📦 Tabla producto-archivo: ACTIVADA\n` +
+                                          `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
                                           `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
@@ -1729,27 +1815,29 @@ async function iniciarWhatsApp() {
                             });
                         }
                         
-                        let mensaje = `📊 *ESTADO DEL BOT - MODO AHORRO*\n\n` +
-                                      `⏰ MODO: setTimeout (solo horarios programados)\n` +
+                        let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 43.0*\n\n` +
+                                      `⏰ MODO: setTimeout + Delay inteligente\n` +
                                       `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                       `📋 Grupos totales: ${total}\n` +
                                       `✅ Grupos activos: ${activos}\n` +
                                       `📌 Pestañas: ${pestanas}\n` +
                                       `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
-                                      `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg\n` +
+                                      `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
+                                      `📦 Múltiples archivos: ACTIVADO\n` +
+                                      `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
                                       `✍️  Typing adaptativo: activado\n` +
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
                                       `🔄 Actualización automática: 6:00 AM\n` +
                                       `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
                                       `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                      `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
+                                      `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
                                       `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
                                       `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
                                       `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
                                       `🔄 Consulta masiva: RESTAURADA\n` +
                                       `🗑️  Limpieza automática: activada\n` +
-                                      `📦 Tabla producto-archivo: ACTIVADA\n` +
+                                      `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
                                       `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
@@ -1766,17 +1854,13 @@ async function iniciarWhatsApp() {
         console.log('   - "listagrupos" - ⚡ PRIORITARIO');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
-        console.log('🎲 **SpinTex y SpinEmijo CORREGIDOS**');
-        console.log('   Ejemplo 1 (con palabra clave): "{spin|Hola|Qué tal|Buenos días}"');
-        console.log('   Ejemplo 2 (solo emojis): "{👋|😊|✨|🙌}"');
-        console.log('   Ejemplo 3 (con palabra clave emoji): "{emoji|😀|😎|🥳}"\n');
-        console.log('📦 **NUEVO: Tabla producto-archivo activa**');
-        console.log('   - Los archivos se envían automáticamente según el producto\n');
-        console.log('🔋 **MODO AHORRO DE BATERÍA ACTIVADO**');
-        console.log('   - ✅ Ya NO hay verificación cada minuto');
-        console.log('   - ✅ setTimeout para cada horario');
-        console.log('   - ✅ 1 cron job a las 6am para actualizar');
-        console.log('   - ✅ Al actualizar, reprograma todos los horarios\n');
+        console.log('📦 **NUEVO: MÚLTIPLES ARCHIVOS POR PRODUCTO**');
+        console.log('   - Ejemplo: Si el producto es "gorra", busca:');
+        console.log('     gorra.jpg (imagen con texto)');
+        console.log('     gorra.mp4 (🎬 video de gorra)');
+        console.log('     gorra.pdf (📄 información de gorra)');
+        console.log('⏱️ **NUEVO: DELAY INTELIGENTE**');
+        console.log('   - Se adapta automáticamente al tiempo real de envío\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
