@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "===================================="
-echo "🚀 INSTALADOR WHATSAPP BOT v47.0"
+echo "🚀 INSTALADOR WHATSAPP BOT v46.1"
 echo "===================================="
 echo ""
 
