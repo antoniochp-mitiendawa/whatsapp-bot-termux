@@ -1,21 +1,11 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 48.0 - CORRECCIÓN PRECIO + RESPUESTAS NEGOCIO + SINÓNIMOS
 // Versión: 46.1 - FILTRO DE ESTADOS + MENCIONES + TEXTOS PROFESIONALES
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos (sin contexto)
 // + MEJORA 3: PROCESAMIENTO INMEDIATO DE MENSAJES
 // + MEJORA 4: MENCIONES EN TODAS LAS RESPUESTAS
 // + MEJORA 5: TEXTOS PROFESIONALES PARA NEGOCIOS
-// + MEJORA 6: FILTRO DE ESTADOS (status@broadcast)
-// + CORRECCIÓN 7: PRECIO EN RESPUESTAS AUTOMÁTICAS (AHORA SÍ SE MUESTRA)
-// + CORRECCIÓN 8: MENCIONES EN GRUPOS (AHORA SÍ FUNCIONAN)
-// + NUEVO 9: CONFIGURACIÓN DE NEGOCIO DESDE GOOGLE SHEETS
-// + NUEVO 10: ATENCIÓN EN PRIVADO SIN NECESIDAD DE MENCIÓN
-// + NUEVO 11: RESPUESTAS CON FORMATO ELEGANTE (ENCABEZADO + DATOS NEGOCIO)
-// + CORRECCIÓN 12: PRECIO AHORA SE MUESTRA CORRECTAMENTE (FIX UNDEFINED)
-// + NUEVO 13: RESPUESTAS PARA DOMICILIO, HORARIO, TELÉFONO, ETC.
-// + NUEVO 14: SINÓNIMOS AMPLIADOS PARA CONSULTAS DEL NEGOCIO
 // + MEJORA 6: FILTRO DE ESTADOS (status@broadcast) - NUEVO
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
 // + NUEVO: Tabla de correspondencia producto-archivo
@@ -25,23 +15,33 @@
 // + VERSIÓN 45.0: Optimización de inmediatez
 // + VERSIÓN 46.0: Menciones a usuarios + textos profesionales
 // + VERSIÓN 46.1: Filtro de estados para evitar procesar status@broadcast
+// Versión: 47.0 - CONFIG NEGOCIO + RESPUESTAS + SINÓNIMOS
+// BASE: VERSIÓN 46.1 (ESTABLE) + NUEVAS FUNCIONALIDADES
+// ============================================
+// ADICIONES (SIN MODIFICAR ESTRUCTURA EXISTENTE):
+// - Variable global configNegocio
+// - Lectura de data.negocio en actualizarAgenda()
+// - Funciones: clasificarConsultaNegocio(), generarRespuestaNegocio()
+// - Nuevas palabras clave en CONFIG.palabras_clave_negocio
+// - Flujo de negocio en evento messages.upsert (ANTES de producto)
+// - CORREGIDO: productosCache mantiene estructura original {producto, archivo}
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
-@@ -58,7 +58,7 @@ const CONFIG = {
+@@ -58,7 +53,7 @@ const CONFIG = {
 audio: '🔊 Escucha más información sobre *[PRODUCTO]*',
 documento: '📄 Aquí tienes más información de *[PRODUCTO]*'
 },
-    // CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 48.0 - SINÓNIMOS AMPLIADOS)
     // NUEVA CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
+    // CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
 textos_sinonimos: {
 saludos: ["¡Hola! 👋", "¡Buen día! ☀️", "¡Hola, gracias por contactarnos! 😊", "¡Un gusto saludarte! 🤝", "¡Gracias por comunicarte! ✨"],
 agradecimientos: ["¡Gracias! 🙏", "Te lo agradecemos ✨", "¡Gracias por tu interés! 🌟", "Agradecemos tu mensaje 💫", "¡Gracias por escribirnos!"],
-@@ -131,24 +131,15 @@ const CONFIG = {
+@@ -131,6 +126,14 @@ const CONFIG = {
 info: ["info", "información", "características", "descripción", "qué es", "detalles", "descripcion", "caracteristicas", "como es", "que tiene", "especificaciones"],
 generica: ["más", "info", "información", "quiero saber", "dime", "mas", "informacion", "saber", "conocer", "interesa", "me interesa", "quisiera saber"]
 },
-    // NUEVA CONFIGURACIÓN PARA CONSULTAS DE NEGOCIO (VERSIÓN 48.0)
+    // NUEVA CONFIGURACIÓN PARA CONSULTAS DE NEGOCIO (VERSIÓN 47.0)
     palabras_clave_negocio: {
         horario: ["horario", "atienden", "abren", "cierran", "hora", "horarios", "atencion", "atención", "a qué hora", "cuándo abren", "cuándo cierran", "días de atención"],
         domicilio: ["domicilio", "ubicación", "ubicacion", "dirección", "direccion", "dónde están", "donde estan", "en dónde", "donde quedan", "como llegar", "cómo llegar", "mapa"],
@@ -52,27 +52,26 @@ generica: ["más", "info", "información", "quiero saber", "dime", "mas", "infor
 // CONFIGURACIÓN PARA INMEDIATEZ
 delay_respuesta_min: 1, // segundos mínimos antes de responder (simular typing)
 delay_respuesta_max: 3  // segundos máximos antes de responder
-};
-
-// ============================================
-// VARIABLES GLOBALES
-// VARIABLES GLOBALES PARA TIMERS
+@@ -141,6 +144,9 @@ const CONFIG = {
 // ============================================
 let timersEnvios = []; // Array para guardar todos los setTimeout activos
-let configNegocio = {}; // Configuración del negocio desde Sheets
+
+// NUEVA VARIABLE GLOBAL PARA CONFIGURACIÓN DE NEGOCIO
+let configNegocio = {};
 
 // Crear carpetas necesarias
 if (!fs.existsSync(CONFIG.carpeta_logs)) {
-@@ -628,7 +619,7 @@ function recargarAgenda() {
+fs.mkdirSync(CONFIG.carpeta_logs);
+@@ -619,7 +625,7 @@ function recargarAgenda() {
 }
 
 // ============================================
-// ACTUALIZAR AGENDA (VERSIÓN 48.0 - CON CONFIG NEGOCIO)
 // ACTUALIZAR AGENDA
+// ACTUALIZAR AGENDA (VERSIÓN 47.0 - CON LECTURA DE NEGOCIO)
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
 try {
-@@ -646,14 +637,6 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
+@@ -637,6 +643,12 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
 return false;
 }
 
@@ -80,34 +79,21 @@ return false;
         if (data.negocio) {
             configNegocio = data.negocio;
             guardarLogLocal(`🏢 Configuración de negocio cargada: ${configNegocio.RAZON_SOCIAL || 'Sin nombre'}`);
-            // Log para depuración
-            guardarLogLocal(`📋 Datos de negocio: ${JSON.stringify(configNegocio)}`);
         }
         
 if (guardarAgendaLocal(data)) {
 recargarAgenda();
 const total = data.grupos?.length || 0;
-@@ -665,10 +648,6 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
-productosCache = data.productos;
-ultimaActualizacionProductos = Date.now();
-guardarLogLocal(`📦 Caché de productos actualizado desde Sheets: ${productosCache.length} productos`);
-                // Log para depuración de precios
-                productosCache.forEach(p => {
-                    guardarLogLocal(`   📦 Producto: ${p.producto}, Precio: ${p.precio}`);
-                });
-}
-
-// Si hay un socket activo, reprogramar todos los envíos
-@@ -1580,7 +1559,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
+@@ -1559,7 +1571,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 48.0 - CORREGIDAS)
 // NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 46.0 - CON MENCIONES)
+// NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 47.0 - CON NEGOCIO)
 // ============================================
 
 // Función para obtener un texto aleatorio de un array de sinónimos
-@@ -1609,27 +1588,14 @@ function extraerTextoDeMensaje(mensaje) {
+@@ -1588,14 +1600,27 @@ function extraerTextoDeMensaje(mensaje) {
 function botEsMencionado(mensaje, botId) {
 if (!mensaje || !botId) return false;
 
@@ -116,14 +102,17 @@ if (!mensaje || !botId) return false;
     
 // Verificar en extendedTextMessage
 const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
+    if (mentionedJid && mentionedJid.includes(botId)) return true;
     if (mentionedJid) {
         for (const jid of mentionedJid) {
             if (jid.split(':')[0] === botIdNormalizado) return true;
         }
     }
-    if (mentionedJid && mentionedJid.includes(botId)) return true;
 
 // Verificar en mensajes con caption
+    if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
     const captionMentioned = mensaje?.imageMessage?.contextInfo?.mentionedJid ||
                             mensaje?.videoMessage?.contextInfo?.mentionedJid ||
                             mensaje?.documentMessage?.contextInfo?.mentionedJid;
@@ -133,13 +122,10 @@ const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
             if (jid.split(':')[0] === botIdNormalizado) return true;
         }
     }
-    if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
-    if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
-    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
 
 return false;
 }
-@@ -1643,76 +1609,14 @@ function esRespuestaABot(mensaje, botId) {
+@@ -1609,14 +1634,76 @@ function esRespuestaABot(mensaje, botId) {
 
 if (!contextInfo?.quotedMessage) return false;
 
@@ -148,13 +134,14 @@ if (!contextInfo?.quotedMessage) return false;
         const quotedParticipant = contextInfo.quotedParticipant ? contextInfo.quotedParticipant.split(':')[0] : null;
         
 // Verificar si el mensaje citado es del bot
-        return participant === botIdNormalizado || quotedParticipant === botIdNormalizado;
         return contextInfo.participant === botId || contextInfo.quotedParticipant === botId;
+        return participant === botIdNormalizado || quotedParticipant === botIdNormalizado;
 } catch (error) {
 return false;
 }
 }
 
+// Función optimizada para obtener producto desde mensaje citado (con fallback)
 // NUEVA FUNCIÓN: Buscar producto en el texto (para mensajes sin cita)
 function buscarProductoEnTexto(texto) {
     if (!texto || productosCache.length === 0) return null;
@@ -171,7 +158,7 @@ function buscarProductoEnTexto(texto) {
     return null;
 }
 
-// NUEVA FUNCIÓN: Clasificar consultas de negocio (VERSIÓN 48.0)
+// NUEVA FUNCIÓN: Clasificar consultas de negocio (VERSIÓN 47.0)
 function clasificarConsultaNegocio(texto) {
     const textoLower = texto.toLowerCase();
     
@@ -214,50 +201,14 @@ function clasificarConsultaNegocio(texto) {
 }
 
 // Función optimizada para obtener producto desde mensaje citado
-// Función optimizada para obtener producto desde mensaje citado (con fallback)
 async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
 try {
 const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
-@@ -1773,7 +1677,7 @@ function obtenerDatosProducto(nombreProducto) {
-return producto;
+@@ -1695,6 +1782,37 @@ function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto)
+return respuesta;
 }
 
-// FUNCIÓN CORREGIDA: Generar respuesta automática (AHORA CON PRECIO)
-// Función para generar respuesta automática según tipo de consulta
-function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto) {
-if (!nombreProducto || !datosProducto) return null;
-
-@@ -1783,59 +1687,10 @@ function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto)
-// Seleccionar una respuesta aleatoria
-let respuesta = obtenerTextoAleatorio(opcionesRespuesta);
-
-    // CORRECCIÓN: Asegurar que el precio tenga formato correcto y no sea undefined
-    let precioFormateado = datosProducto.precio || '';
-    if (precioFormateado) {
-        // Si el precio es un número, convertirlo a string
-        if (typeof precioFormateado === 'number') {
-            precioFormateado = precioFormateado.toString();
-        }
-        // Añadir símbolo $ si no tiene ningún símbolo de moneda
-        if (!precioFormateado.includes('$') && !precioFormateado.includes('€') && !precioFormateado.includes('£') && !precioFormateado.includes('USD')) {
-            precioFormateado = '$' + precioFormateado;
-        }
-    } else {
-        precioFormateado = '[PRECIO NO DISPONIBLE]'; // Fallback visible
-    }
-    
-    // Log para depuración
-    guardarLogLocal(`   💰 Precio formateado: "${precioFormateado}"`);
-    
-// Reemplazar placeholders
-respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
-respuesta = respuesta.replace('[DESCRIPCION]', datosProducto.descripcion || '');
-    respuesta = respuesta.replace('[PRECIO]', precioFormateado);
-    
-    return respuesta;
-}
-
-// NUEVA FUNCIÓN: Generar respuesta para consultas de negocio (VERSIÓN 48.0)
+// NUEVA FUNCIÓN: Generar respuesta para consultas de negocio (VERSIÓN 47.0)
 function generarRespuestaNegocio(tipoConsulta) {
     if (!configNegocio || Object.keys(configNegocio).length === 0) {
         return "Información de contacto no disponible. Por favor, intenta más tarde.";
@@ -284,64 +235,57 @@ function generarRespuestaNegocio(tipoConsulta) {
         default:
             respuesta = `🏢 *${configNegocio.RAZON_SOCIAL || 'Nuestro negocio'}*\n\n${configNegocio.MENSAJE_BIENVENIDA || 'Gracias por contactarnos'}`;
     }
-    respuesta = respuesta.replace('[PRECIO]', datosProducto.precio || '');
-
-return respuesta;
-}
-@@ -1874,7 +1729,7 @@ ${datosAlerta.enlace}
-}
+    
+    return respuesta;
 }
 
-// Función para procesar reacciones a mensajes (VERSIÓN 48.0 - CON MENCIÓN CORREGIDA)
-// Función para procesar reacciones a mensajes (VERSIÓN 46.0 - CON MENCIÓN)
-async function procesarReaccion(sock, mensaje) {
-try {
-// Verificar si es una reacción
-@@ -1991,7 +1846,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
+// Función para generar enlace wa.me para alerta al admin
+function generarEnlaceWaMe(numeroCliente, nombreProducto, preguntaCliente) {
+const numeroLimpio = numeroCliente.split('@')[0].replace(/[^0-9]/g, '');
+@@ -1846,7 +1964,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
 console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 48.0 (PRECIO CORREGIDO + RESPUESTAS NEGOCIO)');
     console.log('🤖 BOT WHATSAPP - VERSIÓN 46.1 (FILTRO DE ESTADOS + MENCIONES)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 47.0 (CONFIG NEGOCIO + RESPUESTAS)');
 console.log('====================================\n');
 console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
 console.log('✍️  Typing adaptativo activado');
-@@ -2020,14 +1875,12 @@ async function iniciarWhatsApp() {
+@@ -1875,12 +1993,13 @@ async function iniciarWhatsApp() {
 console.log('   - No acumula retrasos en el día');
 console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
 console.log('   - Ignora mensajes de status@broadcast');
-    console.log('💰 **PRECIO CORREGIDO**');
-    console.log('   - Ahora se muestra correctamente en todas las respuestas');
-    console.log('🏢 **RESPUESTAS DE NEGOCIO ACTIVADAS**');
-    console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
-    console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
-    console.log('   - ✅ Teléfono: "teléfono", "contacto", "whatsapp"');
-    console.log('   - ✅ Email: "email", "correo", "mail"');
-    console.log('   - ✅ Web: "web", "sitio", "página"\n');
     console.log('   - Evita procesar estados como si fueran mensajes normales');
     console.log('💬 **SISTEMA DE INTERACCIONES VERSIÓN 46.1**');
     console.log('   - ✅ Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
     console.log('   - ✅ MENCIONA al usuario en todas las respuestas');
     console.log('   - ✅ TEXTOS PROFESIONALES para negocios');
     console.log('   - ✅ Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
+    console.log('🏢 **NUEVO: RESPUESTAS DE NEGOCIO**');
+    console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
+    console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
+    console.log('   - ✅ Teléfono: "teléfono", "contacto", "whatsapp"');
+    console.log('   - ✅ Email: "email", "correo", "mail"');
+    console.log('   - ✅ Web: "web", "sitio", "página"');
+    console.log('   - Los datos se cargan desde Google Sheets (hoja CONFIG)\n');
 
 const url_sheets = leerURL();
 if (!url_sheets) {
-@@ -2170,7 +2023,7 @@ async function iniciarWhatsApp() {
+@@ -2023,7 +2142,7 @@ async function iniciarWhatsApp() {
 });
 
 // ============================================
-        // EVENTO DE MENSAJES (VERSIÓN 48.0 - CON RESPUESTAS DE NEGOCIO)
         // EVENTO DE MENSAJES (VERSIÓN 46.1 - CON FILTRO DE ESTADOS)
+        // EVENTO DE MENSAJES (VERSIÓN 47.0 - CON RESPUESTAS DE NEGOCIO)
 // ============================================
 sock.ev.on('messages.upsert', async (m) => {
 const mensaje = m.messages[0];
-@@ -2181,15 +2034,14 @@ async function iniciarWhatsApp() {
+@@ -2034,14 +2153,15 @@ async function iniciarWhatsApp() {
 const remitente = mensaje.key.remoteJid;
 
 // ============================================
-            // FILTRO: Ignorar estados (status@broadcast)
             // NUEVO FILTRO: Ignorar estados (status@broadcast)
+            // FILTRO: Ignorar estados (status@broadcast)
 // ============================================
 if (remitente === 'status@broadcast') {
 return; // Ignorar completamente los estados
@@ -353,12 +297,9 @@ const mensajeId = mensaje.key.id;
 
 // Evitar procesar el mismo mensaje múltiples veces
 if (mensajesEnProcesamiento.has(mensajeId)) return;
-@@ -2207,27 +2059,17 @@ async function iniciarWhatsApp() {
-}
-
+@@ -2061,15 +2181,23 @@ async function iniciarWhatsApp() {
 // ============================================
-            // PARA GRUPOS: VERIFICAR SI DEBEMOS PROCESAR (VERSIÓN CORREGIDA)
-            // PARA GRUPOS: VERIFICAR SI DEBEMOS PROCESAR
+// PARA GRUPOS: VERIFICAR SI DEBEMOS PROCESAR
 // ============================================
             let debeProcesar = false;
             
@@ -366,14 +307,12 @@ if (esGrupo) {
 const esMencion = botEsMencionado(mensaje.message, sock.user.id);
 const esRespuesta = esRespuestaABot(mensaje, sock.user.id);
 
-                // CORRECCIÓN: Log para depuración
-                if (esMencion || esRespuesta) {
-                    debeProcesar = true;
-                    guardarLogLocal(`   👥 Mensaje en grupo procesado (mención: ${esMencion}, respuesta: ${esRespuesta})`);
                 // Solo procesamos si es mención O es respuesta a un mensaje del bot
                 if (!esMencion && !esRespuesta) {
                     mensajesEnProcesamiento.delete(mensajeId);
                     return;
+                if (esMencion || esRespuesta) {
+                    debeProcesar = true;
 }
             } else {
                 // En privado, siempre procesamos (para atención al cliente)
@@ -386,154 +325,117 @@ const esRespuesta = esRespuestaABot(mensaje, sock.user.id);
 }
 
 // ============================================
-@@ -2281,7 +2123,7 @@ async function iniciarWhatsApp() {
+@@ -2123,7 +2251,7 @@ async function iniciarWhatsApp() {
 });
 }
 
-                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 48.0*\n\n` +
                                 let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
+                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 47.0*\n\n` +
 `⏰ MODO: setTimeout + Delay inteligente\n` +
 `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
 `📋 Grupos totales: ${total}\n` +
-@@ -2291,7 +2133,7 @@ async function iniciarWhatsApp() {
+@@ -2133,7 +2261,7 @@ async function iniciarWhatsApp() {
 `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
 `📦 Múltiples archivos: ACTIVADO\n` +
 `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                              `💬 Interacciones: VERSIÓN 48.0 (PRECIO CORREGIDO + NEGOCIO)\n` +
                                               `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
+                                              `💬 Interacciones: VERSIÓN 47.0 (CONFIG NEGOCIO)\n` +
 `✍️  Typing adaptativo: activado\n` +
 `🔗 Link Previews: CON IMAGEN (caché local)\n` +
 `📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -2309,9 +2151,7 @@ async function iniciarWhatsApp() {
+@@ -2151,7 +2279,8 @@ async function iniciarWhatsApp() {
 `📤 Comando listagrupos: disponible (con caché)\n` +
 `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
 `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                              `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
-                                              `💰 PRECIO: CORREGIDO (ya no sale vacío)\n` +
-                                              `🏢 RESPUESTAS NEGOCIO: Horario, Domicilio, Teléfono, Email, Web`;
                                               `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
+                                              `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
+                                              `🏢 CONFIG NEGOCIO: ${configNegocio.RAZON_SOCIAL || 'No configurado'}`;
 
 await sock.sendMessage(remitente, { text: mensaje });
 mensajesEnProcesamiento.delete(mensajeId);
-@@ -2331,7 +2171,7 @@ async function iniciarWhatsApp() {
+@@ -2171,7 +2300,7 @@ async function iniciarWhatsApp() {
 });
 }
 
-                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 48.0*\n\n` +
                             let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
+                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 47.0*\n\n` +
 `⏰ MODO: setTimeout + Delay inteligente\n` +
 `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
 `📋 Grupos totales: ${total}\n` +
-@@ -2341,7 +2181,7 @@ async function iniciarWhatsApp() {
+@@ -2181,7 +2310,7 @@ async function iniciarWhatsApp() {
 `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
 `📦 Múltiples archivos: ACTIVADO\n` +
 `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                          `💬 Interacciones: VERSIÓN 48.0 (PRECIO CORREGIDO + NEGOCIO)\n` +
                                           `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
+                                          `💬 Interacciones: VERSIÓN 47.0 (CONFIG NEGOCIO)\n` +
 `✍️  Typing adaptativo: activado\n` +
 `🔗 Link Previews: CON IMAGEN (caché local)\n` +
 `📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -2359,9 +2199,7 @@ async function iniciarWhatsApp() {
+@@ -2199,7 +2328,8 @@ async function iniciarWhatsApp() {
 `📤 Comando listagrupos: disponible (con caché)\n` +
 `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
 `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                          `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
-                                          `💰 PRECIO: CORREGIDO (ya no sale vacío)\n` +
-                                          `🏢 RESPUESTAS NEGOCIO: Horario, Domicilio, Teléfono, Email, Web`;
                                           `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
+                                          `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
+                                          `🏢 CONFIG NEGOCIO: ${configNegocio.RAZON_SOCIAL || 'No configurado'}`;
 
 await sock.sendMessage(remitente, { text: mensaje });
 mensajesEnProcesamiento.delete(mensajeId);
-@@ -2372,45 +2210,19 @@ async function iniciarWhatsApp() {
+@@ -2210,7 +2340,28 @@ async function iniciarWhatsApp() {
 }
 
 // ============================================
-            // PROCESAR INTERACCIONES (VERSIÓN 48.0 - CON RESPUESTAS DE NEGOCIO)
             // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES) - VERSIÓN 46.1 CON MENCIÓN
+            // NUEVO: VERIFICAR SI ES CONSULTA DE NEGOCIO
+            // ============================================
+            const tipoNegocio = clasificarConsultaNegocio(texto);
+            if (tipoNegocio) {
+                const respuestaNegocio = generarRespuestaNegocio(tipoNegocio);
+                const mensajeConMencion = `@${usuarioId.split('@')[0]} ${respuestaNegocio}`;
+                
+                // Simular typing antes de responder
+                const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
+                await simularTyping(sock, remitente, delayTyping);
+                
+                await sock.sendMessage(remitente, { 
+                    text: mensajeConMencion,
+                    mentions: [usuarioId]
+                });
+                guardarLogLocal(`   ✅ Respuesta de negocio enviada (${tipoNegocio}) con mención a @${usuarioId.split('@')[0]}`);
+                mensajesEnProcesamiento.delete(mensajeId);
+                return;
+            }
+
+            // ============================================
+            // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES)
 // ============================================
 setImmediate(async () => {
 try {
-                    // NUEVO: Verificar si es consulta de negocio
-                    const tipoNegocio = clasificarConsultaNegocio(texto);
-                    if (tipoNegocio) {
-                        const respuestaNegocio = generarRespuestaNegocio(tipoNegocio);
-                        const mensajeConMencion = `@${usuarioId.split('@')[0]} ${respuestaNegocio}`;
-                        
-                        // Simular typing antes de responder
-                        const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
-                        await simularTyping(sock, remitente, delayTyping);
-                        
-                        await sock.sendMessage(remitente, { 
-                            text: mensajeConMencion,
-                            mentions: [usuarioId]
-                        });
-                        guardarLogLocal(`   ✅ Respuesta de negocio enviada (${tipoNegocio}) con mención a @${usuarioId.split('@')[0]}`);
-                        mensajesEnProcesamiento.delete(mensajeId);
-                        return;
-                    }
-                    
-                    // PASO 1: Intentar obtener producto del mensaje citado
-                    let nombreProducto = await obtenerProductoDesdeMensajeCitado(sock, mensaje);
-                    
-                    // PASO 2: Si no hay mensaje citado, buscar producto en el texto (para privado)
-                    if (!nombreProducto && !esGrupo) {
-                        nombreProducto = buscarProductoEnTexto(texto);
-                        if (nombreProducto) {
-                            guardarLogLocal(`   🔍 Producto detectado en texto (sin cita): "${nombreProducto}"`);
-                        }
-                    }
-                    
-                    // Obtener producto del mensaje citado
-                    const nombreProducto = await obtenerProductoDesdeMensajeCitado(sock, mensaje);
-if (!nombreProducto) {
-mensajesEnProcesamiento.delete(mensajeId);
-return;
-}
-
-                    guardarLogLocal(`   🔍 Producto detectado en mensaje citado: "${nombreProducto}"`);
-
-// Obtener datos completos del producto
-const datosProducto = obtenerDatosProducto(nombreProducto);
-if (!datosProducto) {
-@@ -2420,9 +2232,10 @@ async function iniciarWhatsApp() {
+@@ -2232,7 +2383,6 @@ async function iniciarWhatsApp() {
 
 // Clasificar la consulta del usuario
 const tipoConsulta = clasificarConsulta(texto);
                     const usuarioId = mensaje.key.participant || remitente;
 
 if (tipoConsulta !== 'no_respondible') {
-                        // Generar respuesta automática (CORREGIDA - con precio)
-                        // Generar respuesta automática
-const respuesta = generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto);
-if (respuesta) {
-// Añadir mención al usuario
-@@ -2436,7 +2249,7 @@ async function iniciarWhatsApp() {
-text: mensajeConMencion,
-mentions: [usuarioId]
-});
-                            guardarLogLocal(`   ✅ Respuesta automática enviada (${tipoConsulta}) con mención a @${usuarioId.split('@')[0]} - Precio: ${datosProducto.precio}`);
-                            guardarLogLocal(`   ✅ Respuesta automática enviada (${tipoConsulta}) con mención a @${usuarioId.split('@')[0]}`);
-}
-} else {
-// Enviar alerta al admin
-@@ -2481,14 +2294,12 @@ async function iniciarWhatsApp() {
+// Generar respuesta automática
+@@ -2294,12 +2444,13 @@ async function iniciarWhatsApp() {
 console.log('   - Simulación de typing antes de responder (1-3 segundos)');
 console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
 console.log('   - Ignora mensajes de status@broadcast');
-        console.log('💰 **PRECIO CORREGIDO**');
-        console.log('   - Ahora se muestra correctamente en todas las respuestas');
-        console.log('🏢 **RESPUESTAS DE NEGOCIO ACTIVADAS**');
-        console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
-        console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
-        console.log('   - ✅ Teléfono: "teléfono", "contacto", "whatsapp"');
-        console.log('   - ✅ Email: "email", "correo", "mail"');
-        console.log('   - ✅ Web: "web", "sitio", "página"\n');
         console.log('   - Evita procesar estados como si fueran mensajes normales');
         console.log('💬 **INTERACCIONES VERSIÓN 46.1**');
         console.log('   - Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
         console.log('   - MENCIONA al usuario en todas las respuestas');
         console.log('   - TEXTOS PROFESIONALES para negocios');
         console.log('   - Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
+        console.log('🏢 **RESPUESTAS DE NEGOCIO ACTIVADAS**');
+        console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
+        console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
+        console.log('   - ✅ Teléfono: "teléfono", "contacto", "whatsapp"');
+        console.log('   - ✅ Email: "email", "correo", "mail"');
+        console.log('   - ✅ Web: "web", "sitio", "página"');
+        console.log('   - Los datos se cargan desde Google Sheets (hoja CONFIG)\n');
 
 } catch (error) {
 guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
