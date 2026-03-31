@@ -1,5 +1,15 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
+// Versión: 47.0 - CONFIG NEGOCIO + RESPUESTAS + SINÓNIMOS
+// BASE: VERSIÓN 46.1 (ESTABLE) + NUEVAS FUNCIONALIDADES
+// ============================================
+// ADICIONES (SIN MODIFICAR ESTRUCTURA EXISTENTE):
+// - Variable global configNegocio
+// - Lectura de data.negocio en actualizarAgenda()
+// - Funciones: clasificarConsultaNegocio(), generarRespuestaNegocio()
+// - Nuevas palabras clave en CONFIG.palabras_clave_negocio
+// - Flujo de negocio en evento messages.upsert (ANTES de producto)
+// - CORREGIDO: productosCache mantiene estructura original {producto, archivo}
 // Versión: 46.1 - FILTRO DE ESTADOS + MENCIONES + TEXTOS PROFESIONALES
 // + MEJORA 1: Keep-Alive cada 25 segundos
 // + MEJORA 2: Ignorar mensajes de grupos (sin contexto)
@@ -15,29 +25,19 @@
 // + VERSIÓN 45.0: Optimización de inmediatez
 // + VERSIÓN 46.0: Menciones a usuarios + textos profesionales
 // + VERSIÓN 46.1: Filtro de estados para evitar procesar status@broadcast
-// Versión: 47.0 - CONFIG NEGOCIO + RESPUESTAS + SINÓNIMOS
-// BASE: VERSIÓN 46.1 (ESTABLE) + NUEVAS FUNCIONALIDADES
-// ============================================
-// ADICIONES (SIN MODIFICAR ESTRUCTURA EXISTENTE):
-// - Variable global configNegocio
-// - Lectura de data.negocio en actualizarAgenda()
-// - Funciones: clasificarConsultaNegocio(), generarRespuestaNegocio()
-// - Nuevas palabras clave en CONFIG.palabras_clave_negocio
-// - Flujo de negocio en evento messages.upsert (ANTES de producto)
-// - CORREGIDO: productosCache mantiene estructura original {producto, archivo}
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
-@@ -58,7 +53,7 @@ const CONFIG = {
+@@ -53,7 +58,7 @@ const CONFIG = {
 audio: '🔊 Escucha más información sobre *[PRODUCTO]*',
 documento: '📄 Aquí tienes más información de *[PRODUCTO]*'
 },
-    // NUEVA CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
     // CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
+    // NUEVA CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
 textos_sinonimos: {
 saludos: ["¡Hola! 👋", "¡Buen día! ☀️", "¡Hola, gracias por contactarnos! 😊", "¡Un gusto saludarte! 🤝", "¡Gracias por comunicarte! ✨"],
 agradecimientos: ["¡Gracias! 🙏", "Te lo agradecemos ✨", "¡Gracias por tu interés! 🌟", "Agradecemos tu mensaje 💫", "¡Gracias por escribirnos!"],
-@@ -131,6 +126,14 @@ const CONFIG = {
+@@ -126,14 +131,6 @@ const CONFIG = {
 info: ["info", "información", "características", "descripción", "qué es", "detalles", "descripcion", "caracteristicas", "como es", "que tiene", "especificaciones"],
 generica: ["más", "info", "información", "quiero saber", "dime", "mas", "informacion", "saber", "conocer", "interesa", "me interesa", "quisiera saber"]
 },
@@ -52,7 +52,7 @@ generica: ["más", "info", "información", "quiero saber", "dime", "mas", "infor
 // CONFIGURACIÓN PARA INMEDIATEZ
 delay_respuesta_min: 1, // segundos mínimos antes de responder (simular typing)
 delay_respuesta_max: 3  // segundos máximos antes de responder
-@@ -141,6 +144,9 @@ const CONFIG = {
+@@ -144,9 +141,6 @@ const CONFIG = {
 // ============================================
 let timersEnvios = []; // Array para guardar todos los setTimeout activos
 
@@ -62,16 +62,16 @@ let configNegocio = {};
 // Crear carpetas necesarias
 if (!fs.existsSync(CONFIG.carpeta_logs)) {
 fs.mkdirSync(CONFIG.carpeta_logs);
-@@ -619,7 +625,7 @@ function recargarAgenda() {
+@@ -625,7 +619,7 @@ function recargarAgenda() {
 }
 
 // ============================================
-// ACTUALIZAR AGENDA
 // ACTUALIZAR AGENDA (VERSIÓN 47.0 - CON LECTURA DE NEGOCIO)
+// ACTUALIZAR AGENDA
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
 try {
-@@ -637,6 +643,12 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
+@@ -643,12 +637,6 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
 return false;
 }
 
@@ -84,16 +84,16 @@ return false;
 if (guardarAgendaLocal(data)) {
 recargarAgenda();
 const total = data.grupos?.length || 0;
-@@ -1559,7 +1571,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
+@@ -1571,7 +1559,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
-// NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 46.0 - CON MENCIONES)
 // NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 47.0 - CON NEGOCIO)
+// NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 46.0 - CON MENCIONES)
 // ============================================
 
 // Función para obtener un texto aleatorio de un array de sinónimos
-@@ -1588,14 +1600,27 @@ function extraerTextoDeMensaje(mensaje) {
+@@ -1600,27 +1588,14 @@ function extraerTextoDeMensaje(mensaje) {
 function botEsMencionado(mensaje, botId) {
 if (!mensaje || !botId) return false;
 
@@ -102,17 +102,14 @@ if (!mensaje || !botId) return false;
     
 // Verificar en extendedTextMessage
 const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
-    if (mentionedJid && mentionedJid.includes(botId)) return true;
     if (mentionedJid) {
         for (const jid of mentionedJid) {
             if (jid.split(':')[0] === botIdNormalizado) return true;
         }
     }
+    if (mentionedJid && mentionedJid.includes(botId)) return true;
 
 // Verificar en mensajes con caption
-    if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
-    if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
-    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
     const captionMentioned = mensaje?.imageMessage?.contextInfo?.mentionedJid ||
                             mensaje?.videoMessage?.contextInfo?.mentionedJid ||
                             mensaje?.documentMessage?.contextInfo?.mentionedJid;
@@ -122,10 +119,13 @@ const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
             if (jid.split(':')[0] === botIdNormalizado) return true;
         }
     }
+    if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
 
 return false;
 }
-@@ -1609,14 +1634,76 @@ function esRespuestaABot(mensaje, botId) {
+@@ -1634,76 +1609,14 @@ function esRespuestaABot(mensaje, botId) {
 
 if (!contextInfo?.quotedMessage) return false;
 
@@ -134,14 +134,13 @@ if (!contextInfo?.quotedMessage) return false;
         const quotedParticipant = contextInfo.quotedParticipant ? contextInfo.quotedParticipant.split(':')[0] : null;
         
 // Verificar si el mensaje citado es del bot
-        return contextInfo.participant === botId || contextInfo.quotedParticipant === botId;
         return participant === botIdNormalizado || quotedParticipant === botIdNormalizado;
+        return contextInfo.participant === botId || contextInfo.quotedParticipant === botId;
 } catch (error) {
 return false;
 }
 }
 
-// Función optimizada para obtener producto desde mensaje citado (con fallback)
 // NUEVA FUNCIÓN: Buscar producto en el texto (para mensajes sin cita)
 function buscarProductoEnTexto(texto) {
     if (!texto || productosCache.length === 0) return null;
@@ -201,10 +200,11 @@ function clasificarConsultaNegocio(texto) {
 }
 
 // Función optimizada para obtener producto desde mensaje citado
+// Función optimizada para obtener producto desde mensaje citado (con fallback)
 async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
 try {
 const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
-@@ -1695,6 +1782,37 @@ function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto)
+@@ -1782,37 +1695,6 @@ function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto)
 return respuesta;
 }
 
@@ -242,25 +242,19 @@ function generarRespuestaNegocio(tipoConsulta) {
 // Función para generar enlace wa.me para alerta al admin
 function generarEnlaceWaMe(numeroCliente, nombreProducto, preguntaCliente) {
 const numeroLimpio = numeroCliente.split('@')[0].replace(/[^0-9]/g, '');
-@@ -1846,7 +1964,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
+@@ -1964,7 +1846,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
 console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 46.1 (FILTRO DE ESTADOS + MENCIONES)');
     console.log('🤖 BOT WHATSAPP - VERSIÓN 47.0 (CONFIG NEGOCIO + RESPUESTAS)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 46.1 (FILTRO DE ESTADOS + MENCIONES)');
 console.log('====================================\n');
 console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
 console.log('✍️  Typing adaptativo activado');
-@@ -1875,12 +1993,13 @@ async function iniciarWhatsApp() {
+@@ -1993,13 +1875,12 @@ async function iniciarWhatsApp() {
 console.log('   - No acumula retrasos en el día');
 console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
 console.log('   - Ignora mensajes de status@broadcast');
-    console.log('   - Evita procesar estados como si fueran mensajes normales');
-    console.log('💬 **SISTEMA DE INTERACCIONES VERSIÓN 46.1**');
-    console.log('   - ✅ Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
-    console.log('   - ✅ MENCIONA al usuario en todas las respuestas');
-    console.log('   - ✅ TEXTOS PROFESIONALES para negocios');
-    console.log('   - ✅ Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
     console.log('🏢 **NUEVO: RESPUESTAS DE NEGOCIO**');
     console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
     console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
@@ -268,24 +262,30 @@ console.log('   - Ignora mensajes de status@broadcast');
     console.log('   - ✅ Email: "email", "correo", "mail"');
     console.log('   - ✅ Web: "web", "sitio", "página"');
     console.log('   - Los datos se cargan desde Google Sheets (hoja CONFIG)\n');
+    console.log('   - Evita procesar estados como si fueran mensajes normales');
+    console.log('💬 **SISTEMA DE INTERACCIONES VERSIÓN 46.1**');
+    console.log('   - ✅ Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
+    console.log('   - ✅ MENCIONA al usuario en todas las respuestas');
+    console.log('   - ✅ TEXTOS PROFESIONALES para negocios');
+    console.log('   - ✅ Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
 
 const url_sheets = leerURL();
 if (!url_sheets) {
-@@ -2023,7 +2142,7 @@ async function iniciarWhatsApp() {
+@@ -2142,7 +2023,7 @@ async function iniciarWhatsApp() {
 });
 
 // ============================================
-        // EVENTO DE MENSAJES (VERSIÓN 46.1 - CON FILTRO DE ESTADOS)
         // EVENTO DE MENSAJES (VERSIÓN 47.0 - CON RESPUESTAS DE NEGOCIO)
+        // EVENTO DE MENSAJES (VERSIÓN 46.1 - CON FILTRO DE ESTADOS)
 // ============================================
 sock.ev.on('messages.upsert', async (m) => {
 const mensaje = m.messages[0];
-@@ -2034,14 +2153,15 @@ async function iniciarWhatsApp() {
+@@ -2153,15 +2034,14 @@ async function iniciarWhatsApp() {
 const remitente = mensaje.key.remoteJid;
 
 // ============================================
-            // NUEVO FILTRO: Ignorar estados (status@broadcast)
             // FILTRO: Ignorar estados (status@broadcast)
+            // NUEVO FILTRO: Ignorar estados (status@broadcast)
 // ============================================
 if (remitente === 'status@broadcast') {
 return; // Ignorar completamente los estados
@@ -297,7 +297,7 @@ const mensajeId = mensaje.key.id;
 
 // Evitar procesar el mismo mensaje múltiples veces
 if (mensajesEnProcesamiento.has(mensajeId)) return;
-@@ -2061,15 +2181,23 @@ async function iniciarWhatsApp() {
+@@ -2181,23 +2061,15 @@ async function iniciarWhatsApp() {
 // ============================================
 // PARA GRUPOS: VERIFICAR SI DEBEMOS PROCESAR
 // ============================================
@@ -307,12 +307,12 @@ if (esGrupo) {
 const esMencion = botEsMencionado(mensaje.message, sock.user.id);
 const esRespuesta = esRespuestaABot(mensaje, sock.user.id);
 
+                if (esMencion || esRespuesta) {
+                    debeProcesar = true;
                 // Solo procesamos si es mención O es respuesta a un mensaje del bot
                 if (!esMencion && !esRespuesta) {
                     mensajesEnProcesamiento.delete(mensajeId);
                     return;
-                if (esMencion || esRespuesta) {
-                    debeProcesar = true;
 }
             } else {
                 // En privado, siempre procesamos (para atención al cliente)
@@ -325,67 +325,66 @@ const esRespuesta = esRespuestaABot(mensaje, sock.user.id);
 }
 
 // ============================================
-@@ -2123,7 +2251,7 @@ async function iniciarWhatsApp() {
+@@ -2251,7 +2123,7 @@ async function iniciarWhatsApp() {
 });
 }
 
-                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
                                 let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 47.0*\n\n` +
+                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
 `⏰ MODO: setTimeout + Delay inteligente\n` +
 `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
 `📋 Grupos totales: ${total}\n` +
-@@ -2133,7 +2261,7 @@ async function iniciarWhatsApp() {
+@@ -2261,7 +2133,7 @@ async function iniciarWhatsApp() {
 `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
 `📦 Múltiples archivos: ACTIVADO\n` +
 `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                              `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
                                               `💬 Interacciones: VERSIÓN 47.0 (CONFIG NEGOCIO)\n` +
+                                              `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
 `✍️  Typing adaptativo: activado\n` +
 `🔗 Link Previews: CON IMAGEN (caché local)\n` +
 `📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -2151,7 +2279,8 @@ async function iniciarWhatsApp() {
+@@ -2279,8 +2151,7 @@ async function iniciarWhatsApp() {
 `📤 Comando listagrupos: disponible (con caché)\n` +
 `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
 `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                              `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
                                               `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
                                               `🏢 CONFIG NEGOCIO: ${configNegocio.RAZON_SOCIAL || 'No configurado'}`;
+                                              `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
 
 await sock.sendMessage(remitente, { text: mensaje });
 mensajesEnProcesamiento.delete(mensajeId);
-@@ -2171,7 +2300,7 @@ async function iniciarWhatsApp() {
+@@ -2300,7 +2171,7 @@ async function iniciarWhatsApp() {
 });
 }
 
-                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
                             let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 47.0*\n\n` +
+                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
 `⏰ MODO: setTimeout + Delay inteligente\n` +
 `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
 `📋 Grupos totales: ${total}\n` +
-@@ -2181,7 +2310,7 @@ async function iniciarWhatsApp() {
+@@ -2310,7 +2181,7 @@ async function iniciarWhatsApp() {
 `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
 `📦 Múltiples archivos: ACTIVADO\n` +
 `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                          `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
                                           `💬 Interacciones: VERSIÓN 47.0 (CONFIG NEGOCIO)\n` +
+                                          `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
 `✍️  Typing adaptativo: activado\n` +
 `🔗 Link Previews: CON IMAGEN (caché local)\n` +
 `📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -2199,7 +2328,8 @@ async function iniciarWhatsApp() {
+@@ -2328,8 +2199,7 @@ async function iniciarWhatsApp() {
 `📤 Comando listagrupos: disponible (con caché)\n` +
 `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
 `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                          `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
                                           `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)\n` +
                                           `🏢 CONFIG NEGOCIO: ${configNegocio.RAZON_SOCIAL || 'No configurado'}`;
+                                          `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
 
 await sock.sendMessage(remitente, { text: mensaje });
 mensajesEnProcesamiento.delete(mensajeId);
-@@ -2210,7 +2340,28 @@ async function iniciarWhatsApp() {
+@@ -2340,28 +2210,7 @@ async function iniciarWhatsApp() {
 }
 
 // ============================================
-            // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES) - VERSIÓN 46.1 CON MENCIÓN
             // NUEVO: VERIFICAR SI ES CONSULTA DE NEGOCIO
             // ============================================
             const tipoNegocio = clasificarConsultaNegocio(texto);
@@ -408,10 +407,11 @@ mensajesEnProcesamiento.delete(mensajeId);
 
             // ============================================
             // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES)
+            // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES) - VERSIÓN 46.1 CON MENCIÓN
 // ============================================
 setImmediate(async () => {
 try {
-@@ -2232,7 +2383,6 @@ async function iniciarWhatsApp() {
+@@ -2383,6 +2232,7 @@ async function iniciarWhatsApp() {
 
 // Clasificar la consulta del usuario
 const tipoConsulta = clasificarConsulta(texto);
@@ -419,16 +419,10 @@ const tipoConsulta = clasificarConsulta(texto);
 
 if (tipoConsulta !== 'no_respondible') {
 // Generar respuesta automática
-@@ -2294,12 +2444,13 @@ async function iniciarWhatsApp() {
+@@ -2444,13 +2294,12 @@ async function iniciarWhatsApp() {
 console.log('   - Simulación de typing antes de responder (1-3 segundos)');
 console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
 console.log('   - Ignora mensajes de status@broadcast');
-        console.log('   - Evita procesar estados como si fueran mensajes normales');
-        console.log('💬 **INTERACCIONES VERSIÓN 46.1**');
-        console.log('   - Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
-        console.log('   - MENCIONA al usuario en todas las respuestas');
-        console.log('   - TEXTOS PROFESIONALES para negocios');
-        console.log('   - Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
         console.log('🏢 **RESPUESTAS DE NEGOCIO ACTIVADAS**');
         console.log('   - ✅ Horario: "horario", "atienden", "a qué hora"');
         console.log('   - ✅ Domicilio: "domicilio", "ubicación", "dónde están"');
@@ -436,6 +430,12 @@ console.log('   - Ignora mensajes de status@broadcast');
         console.log('   - ✅ Email: "email", "correo", "mail"');
         console.log('   - ✅ Web: "web", "sitio", "página"');
         console.log('   - Los datos se cargan desde Google Sheets (hoja CONFIG)\n');
+        console.log('   - Evita procesar estados como si fueran mensajes normales');
+        console.log('💬 **INTERACCIONES VERSIÓN 46.1**');
+        console.log('   - Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
+        console.log('   - MENCIONA al usuario en todas las respuestas');
+        console.log('   - TEXTOS PROFESIONALES para negocios');
+        console.log('   - Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
 
 } catch (error) {
 guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
