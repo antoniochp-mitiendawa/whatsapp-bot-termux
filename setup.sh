@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "===================================="
-echo "CONFIGURANDO WHATSAPP BOT"
+echo "CONFIGURANDO WHATSAPP BOT V47.0"
 echo "===================================="
 echo ""
 
@@ -14,7 +14,7 @@ pkg upgrade -y
 echo "📦 PASO 2: Instalando Git..."
 pkg install git -y
 
-# PASO 3: Instalar Node.js
+# PASO 3: Instalar Node.js LTS
 echo "📦 PASO 3: Instalando Node.js..."
 pkg install nodejs-lts -y
 
@@ -22,16 +22,23 @@ pkg install nodejs-lts -y
 echo "📦 PASO 4: Instalando Yarn..."
 pkg install yarn -y
 
-# PASO 5: Entrar a la carpeta del bot
-echo "📦 PASO 5: Entrando a la carpeta del bot..."
+# PASO 5: Crear carpeta del bot si no existe
+echo "📦 PASO 5: Creando carpeta del bot..."
+mkdir -p whatsapp-bot
+
+# PASO 6: Copiar URL a la carpeta del bot
+echo "📦 PASO 6: Copiando configuración..."
+cp url_sheets.txt whatsapp-bot/
+
+# PASO 7: Entrar a la carpeta del bot
 cd whatsapp-bot
 
-# PASO 6: Inicializar proyecto Node.js
-echo "📦 PASO 6: Inicializando proyecto..."
+# PASO 8: Inicializar proyecto Node.js
+echo "📦 PASO 7: Inicializando proyecto..."
 npm init -y
 
-# PASO 7: Instalar dependencias
-echo "📦 PASO 7: Instalando librerías..."
+# PASO 9: Instalar dependencias
+echo "📦 PASO 8: Instalando librerías..."
 npm install @whiskeysockets/baileys@6.7.0
 npm install @hapi/boom
 npm install qrcode-terminal
@@ -41,8 +48,8 @@ npm install pino
 npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
-# PASO 8: Crear carpetas necesarias
-echo "📦 PASO 8: Creando carpetas..."
+# PASO 10: Crear carpetas necesarias
+echo "📦 PASO 9: Creando carpetas..."
 mkdir -p logs
 mkdir -p cache
 mkdir -p sesion_whatsapp
@@ -52,9 +59,8 @@ echo "===================================="
 echo "✅ CONFIGURACIÓN COMPLETA"
 echo "===================================="
 echo ""
-echo "Todo está instalado correctamente."
+echo "Bot instalado en: $(pwd)"
 echo ""
 echo "Para iniciar el bot:"
-echo "cd ~/whatsapp-bot-termux/whatsapp-bot"
 echo "node bot.js"
 echo ""
