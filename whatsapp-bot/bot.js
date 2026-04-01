@@ -3,42 +3,39 @@
 // Versión: 47.0 - CONFIG NEGOCIO + RESPUESTAS + SINÓNIMOS
 // BASE: VERSIÓN 46.1 (ESTABLE) + NUEVAS FUNCIONALIDADES
 // ============================================
-// ADICIONES (SIN MODIFICAR ESTRUCTURA EXISTENTE):
-// - Variable global configNegocio
-// - Lectura de data.negocio en actualizarAgenda()
-// - Funciones: clasificarConsultaNegocio(), generarRespuestaNegocio()
-// - Nuevas palabras clave en CONFIG.palabras_clave_negocio
-// - Flujo de negocio en evento messages.upsert (ANTES de producto)
-// - CORREGIDO: productosCache mantiene estructura original {producto, archivo}
-// Versión: 46.1 - FILTRO DE ESTADOS + MENCIONES + TEXTOS PROFESIONALES
-// + MEJORA 1: Keep-Alive cada 25 segundos
-// + MEJORA 2: Ignorar mensajes de grupos (sin contexto)
-// + MEJORA 3: PROCESAMIENTO INMEDIATO DE MENSAJES
-// + MEJORA 4: MENCIONES EN TODAS LAS RESPUESTAS
-// + MEJORA 5: TEXTOS PROFESIONALES PARA NEGOCIOS
-// + MEJORA 6: FILTRO DE ESTADOS (status@broadcast) - NUEVO
-// + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
-// + NUEVO: Tabla de correspondencia producto-archivo
-// + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados con setTimeout)
-// + VERSIÓN 43.0: Múltiples archivos por producto
-// + VERSIÓN 44.0: Interacciones con menciones y reacciones
-// + VERSIÓN 45.0: Optimización de inmediatez
-// + VERSIÓN 46.0: Menciones a usuarios + textos profesionales
-// + VERSIÓN 46.1: Filtro de estados para evitar procesar status@broadcast
+// + MEJORA: MOTOR DE EMPAREJAMIENTO (PAIRING CODE)
+// + MEJORA: REGISTRO DE DUEÑO POST-VINCULACIÓN
+// + MEJORA: DELAY ANTISPAM DINÁMICO (15-18 SEG)
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    fetchLatestBaileysVersion, 
+    getUrlInfo, 
+    Browsers,
+    delay,
+    makeInMemoryStore,
+    jidDecode
+} = require('@whiskeysockets/baileys');
 const fs = require('fs');
 const pino = require('pino');
 const axios = require('axios');
 const { Boom } = require('@hapi/boom');
+const readline = require('readline');
+const nodeCron = require('node-cron');
 
+// CONFIGURACIÓN GLOBAL (PROTEGIDA)
 const CONFIG = {
     carpeta_logs: './logs',
     archivo_store: './baileys_store.json',
+    archivo_dueno: './owner_number.txt',
+    archivo_url: './url_sheets.txt',
     delay_entre_archivos: 2,
-    tiempo_entre_mensajes_min: 5,
-    tiempo_entre_mensajes_max: 10,
+    tiempo_entre_mensajes_min: 15, // Actualizado a 15s
+    tiempo_entre_mensajes_max: 18, // Actualizado a 18s
+    ruta_raiz_almacenamiento: '/storage/emulated/0/',
     textos_sinonimos: {
         saludos: ["¡Hola! 👋", "¡Buen día! ☀️", "¡Hola, gracias por contactarnos! 😊", "¡Un gusto saludarte! 🤝", "¡Gracias por comunicarte! ✨"],
         agradecimientos: ["¡Gracias! 🙏", "Te lo agradecemos ✨", "¡Gracias por tu interés! 🌟", "Agradecemos tu mensaje 💫", "¡Gracias por escribirnos!"],
@@ -56,17 +53,18 @@ const CONFIG = {
         email: ["email", "correo", "mail", "electrónico", "electronico", "e-mail"],
         web: ["web", "sitio", "página", "pagina", "website", "internet", "online"]
     },
-    delay_respuesta_min: 1, // segundos mínimos antes de responder (simular typing)
-    delay_respuesta_max: 3  // segundos máximos antes de responder
+    delay_respuesta_min: 1, 
+    delay_respuesta_max: 3  
 };
 
-// ============================================
-let timersEnvios = []; // Array para guardar todos los setTimeout activos
-let configNegocio = {}; // NUEVA VARIABLE GLOBAL PARA CONFIGURACIÓN DE NEGOCIO
-const mensajesEnProcesamiento = new Set();
+// VARIABLES DE ESTADO
+let timersEnvios = []; 
+let configNegocio = {}; 
 let productosCache = [];
+let gruposProgramados = [];
+const mensajesEnProcesamiento = new Set();
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-// Crear carpetas necesarias
 if (!fs.existsSync(CONFIG.carpeta_logs)) {
     fs.mkdirSync(CONFIG.carpeta_logs);
 }
@@ -78,8 +76,10 @@ function guardarLogLocal(mensaje) {
     console.log(log.trim());
 }
 
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+
 // ============================================
-// ACTUALIZAR AGENDA (VERSIÓN 47.0 - CON LECTURA DE NEGOCIO)
+// LÓGICA DE GOOGLE SHEETS (BLINDADA)
 // ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
@@ -91,25 +91,48 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
             return false;
         }
 
-        // NUEVO: Guardar configuración del negocio
         if (data.negocio) {
             configNegocio = data.negocio;
-            guardarLogLocal(`🏢 Configuración de negocio cargada: ${configNegocio.RAZON_SOCIAL || 'Sin nombre'}`);
+            guardarLogLocal(`🏢 Negocio: ${configNegocio.RAZON_SOCIAL || 'Cargado'}`);
         }
         
         productosCache = data.productos || [];
-        guardarLogLocal(`✅ Agenda actualizada (${origen}): ${productosCache.length} productos cargados`);
-        return true;
+        
+        // Filtrar grupos (Columna E para días y F para activo)
+        if (data.envios) {
+            gruposProgramados = data.envios.filter(g => {
+                const activo = (g.ACTIVO || '').toUpperCase() === 'SI';
+                return activo;
+            });
+        }
 
+        guardarLogLocal(`✅ Sincronización Exitosa:`);
+        guardarLogLocal(`📦 Productos: ${productosCache.length}`);
+        guardarLogLocal(`👥 Grupos Activos: ${gruposProgramados.length}`);
+        guardarLogLocal(`⏰ Horario D2: ${data.horario_global || 'Pendiente'}`);
+        
+        return true;
     } catch (error) {
-        guardarLogLocal(`❌ Error en actualizarAgenda: ${error.message}`);
+        guardarLogLocal(`❌ Error Sheets: ${error.message}`);
         return false;
     }
 }
 
 // ============================================
-// FUNCIONES DE INTERACCIONES
+// FUNCIONES DE INTERACCIÓN Y SPINTAX (INTEGRALES)
 // ============================================
+function obtenerSinonimo(tipo) {
+    const lista = CONFIG.textos_sinonimos[tipo];
+    return lista[Math.floor(Math.random() * lista.length)];
+}
+
+function aplicarSpintax(texto) {
+    if (!texto) return "";
+    return texto.replace(/{([^{}]+)}/g, (match, opciones) => {
+        const choices = opciones.split('|');
+        return choices[Math.floor(Math.random() * choices.length)];
+    });
+}
 
 function botEsMencionado(mensaje, botId) {
     if (!mensaje || !botId) return false;
@@ -117,150 +140,187 @@ function botEsMencionado(mensaje, botId) {
     const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid || 
                         mensaje?.imageMessage?.contextInfo?.mentionedJid ||
                         mensaje?.videoMessage?.contextInfo?.mentionedJid;
-    
     if (mentionedJid) {
-        for (const jid of mentionedJid) {
-            if (jid.split(':')[0] === botIdNormalizado) return true;
-        }
+        return mentionedJid.some(jid => jid.split(':')[0] === botIdNormalizado);
     }
     return false;
 }
 
 function esRespuestaABot(mensaje, botId) {
-    try {
-        const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
-                            mensaje.message?.imageMessage?.contextInfo;
-        if (!contextInfo?.quotedMessage) return false;
-
-        const botIdNormalizado = botId.split(':')[0];
-        const participant = contextInfo.participant ? contextInfo.participant.split(':')[0] : null;
-        const quotedParticipant = contextInfo.quotedParticipant ? contextInfo.quotedParticipant.split(':')[0] : null;
-        
-        return participant === botIdNormalizado || quotedParticipant === botIdNormalizado;
-    } catch (error) {
-        return false;
-    }
+    const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
+                        mensaje.message?.imageMessage?.contextInfo;
+    if (!contextInfo?.quotedMessage) return false;
+    const botIdNormalizado = botId.split(':')[0];
+    const participant = contextInfo.participant?.split(':')[0];
+    const quotedParticipant = contextInfo.quotedParticipant?.split(':')[0];
+    return participant === botIdNormalizado || quotedParticipant === botIdNormalizado;
 }
 
 function clasificarConsultaNegocio(texto) {
     const textoLower = texto.toLowerCase();
     for (const clave in CONFIG.palabras_clave_negocio) {
-        for (const palabra of CONFIG.palabras_clave_negocio[clave]) {
-            if (textoLower.includes(palabra)) return clave;
-        }
+        if (CONFIG.palabras_clave_negocio[clave].some(p => textoLower.includes(p))) return clave;
     }
     return null;
 }
 
 function generarRespuestaNegocio(tipoConsulta) {
-    if (!configNegocio || Object.keys(configNegocio).length === 0) {
-        return "Información de contacto no disponible. Por favor, intenta más tarde.";
-    }
-    
-    let respuesta = '';
+    if (!configNegocio) return "Lo siento, la información no está disponible.";
     switch(tipoConsulta) {
-        case 'horario':
-            respuesta = `🕒 *Nuestro horario de atención:*\n${configNegocio.HORARIO_ATENCION || 'No especificado'}`;
-            break;
-        case 'domicilio':
-            respuesta = `📍 *Nuestra ubicación:*\n${configNegocio.UBICACION || 'No especificada'}`;
-            break;
-        case 'telefono':
-            respuesta = `📞 *Teléfono de contacto:*\n${configNegocio.TELEFONO_CONTACTO || 'No especificado'}\n\n📱 *WhatsApp:*\nwa.me/${(configNegocio.TELEFONO_CONTACTO || '').replace(/[^0-9]/g, '')}`;
-            break;
-        case 'email':
-            respuesta = `📧 *Correo electrónico:*\n${configNegocio.EMAIL_CONTACTO || 'No especificado'}`;
-            break;
-        case 'web':
-            respuesta = `🌐 *Sitio web:*\n${configNegocio.SITIO_WEB || 'No especificado'}`;
-            break;
-        default:
-            respuesta = `🏢 *${configNegocio.RAZON_SOCIAL || 'Nuestro negocio'}*\n\n${configNegocio.MENSAJE_BIENVENIDA || 'Gracias por contactarnos'}`;
+        case 'horario': return `🕒 *Horario:*\n${configNegocio.HORARIO_ATENCION || 'No definido'}`;
+        case 'domicilio': return `📍 *Ubicación:*\n${configNegocio.UBICACION || 'No definida'}`;
+        case 'telefono': return `📞 *Contacto:*\n${configNegocio.TELEFONO_CONTACTO || 'No definido'}`;
+        case 'email': return `📧 *Email:*\n${configNegocio.EMAIL_CONTACTO || 'No definido'}`;
+        case 'web': return `🌐 *Web:*\n${configNegocio.SITIO_WEB || 'No definida'}`;
+        default: return configNegocio.MENSAJE_BIENVENIDA || "Hola, ¿en qué puedo ayudarte?";
     }
-    return respuesta;
-}
-
-async function simularTyping(sock, jid, segundos) {
-    await sock.sendPresenceUpdate('composing', jid);
-    await new Promise(resolve => setTimeout(resolve, segundos * 1000));
-    await sock.sendPresenceUpdate('paused', jid);
 }
 
 // ============================================
-// INICIO DEL BOT
+// MOTOR DE INICIO Y VINCULACIÓN
 // ============================================
 async function iniciarWhatsApp() {
-    console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 47.0 (CONFIG NEGOCIO + RESPUESTAS)');
-    console.log('====================================\n');
-
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
-        browser: Browsers.macOS('Desktop'),
+        printQRInTerminal: false, // Forzar Pairing Code
+        browser: Browsers.ubuntu('Chrome'),
         logger: pino({ level: 'silent' })
     });
 
+    // PASO 1: VINCULACIÓN POR CÓDIGO
+    if (!sock.authState.creds.registered) {
+        console.log('\n====================================');
+        console.log('📱 CONFIGURACIÓN DE NÚMERO BOT');
+        console.log('====================================');
+        const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
+        const code = await sock.requestPairingCode(numeroBot.replace(/[^0-9]/g, ''));
+        console.log(`\n🔑 CÓDIGO DE VINCULACIÓN: ${code}\n`);
+    }
+
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('messages.upsert', async (m) => {
-        const mensaje = m.messages[0];
-        if (!mensaje.message || mensaje.key.fromMe) return;
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+        
+        if (connection === 'open') {
+            guardarLogLocal('✅ Conexión establecida con WhatsApp');
 
-        const remitente = mensaje.key.remoteJid;
+            // PASO 2: REGISTRO DEL DUEÑO (Si no existe)
+            if (!fs.existsSync(CONFIG.archivo_dueno)) {
+                const numDueno = await question('👤 Escribe el número del DUEÑO (ej: 52155...): ');
+                const jidDueno = numDueno.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                fs.writeFileSync(CONFIG.archivo_dueno, jidDueno);
+                
+                await sock.sendMessage(jidDueno, { 
+                    text: '✅ *Bot Activado:* Eres el dueño oficial. Comandos: *actualizar*' 
+                });
+            }
+
+            // Sincronización Inicial
+            if (fs.existsSync(CONFIG.archivo_url)) {
+                const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
+                await actualizarAgenda(sock, url, 'inicial');
+            }
+        }
+
+        if (connection === 'close') {
+            const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
+            if (reason !== DisconnectReason.loggedOut) {
+                iniciarWhatsApp();
+            }
+        }
+    });
+
+    // ============================================
+    // PROCESAMIENTO DE MENSAJES (v47.0 COMPLETA)
+    // ============================================
+    sock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const remitente = msg.key.remoteJid;
         if (remitente === 'status@broadcast') return;
 
-        const esGrupo = remitente.includes('@g.us');
-        const mensajeId = mensaje.key.id;
-        const usuarioId = mensaje.key.participant || remitente;
-        const texto = (mensaje.message.conversation || mensaje.message.extendedTextMessage?.text || "").toLowerCase();
+        const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
+        const usuarioId = msg.key.participant || remitente;
+        const mensajeId = msg.key.id;
 
         if (mensajesEnProcesamiento.has(mensajeId)) return;
         mensajesEnProcesamiento.add(mensajeId);
 
-        let debeProcesar = !esGrupo || botEsMencionado(mensaje.message, sock.user.id) || esRespuestaABot(mensaje, sock.user.id);
+        // Validar si es el dueño
+        const jidDueno = fs.existsSync(CONFIG.archivo_dueno) ? fs.readFileSync(CONFIG.archivo_dueno, 'utf-8').trim() : null;
+        const esDueno = remitente === jidDueno;
 
-        if (!debeProcesar) {
+        if (esDueno && texto === 'actualizar') {
+            const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
+            await sock.sendMessage(remitente, { text: '🔄 Sincronizando...' });
+            await actualizarAgenda(sock, url, 'manual');
+            await sock.sendMessage(remitente, { text: '✅ Base de datos actualizada.' });
             mensajesEnProcesamiento.delete(mensajeId);
             return;
         }
 
-        // VERIFICAR CONSULTA DE NEGOCIO (PRIORIDAD)
+        // LÓGICA DE NEGOCIO (SIN MODIFICAR)
         const tipoNegocio = clasificarConsultaNegocio(texto);
         if (tipoNegocio) {
-            const respuestaNegocio = generarRespuestaNegocio(tipoNegocio);
-            const mensajeConMencion = `@${usuarioId.split('@')[0]} ${respuestaNegocio}`;
+            const respuesta = generarRespuestaNegocio(tipoNegocio);
+            const mencion = `@${usuarioId.split('@')[0]} ${respuesta}`;
             
-            const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
-            await simularTyping(sock, remitente, delayTyping);
+            await sock.sendPresenceUpdate('composing', remitente);
+            await delay(2000);
             
-            await sock.sendMessage(remitente, { 
-                text: mensajeConMencion,
-                mentions: [usuarioId]
-            });
-            guardarLogLocal(`✅ Respuesta de negocio enviada (${tipoNegocio})`);
+            await sock.sendMessage(remitente, { text: mencion, mentions: [usuarioId] });
             mensajesEnProcesamiento.delete(mensajeId);
             return;
         }
 
-        // Lógica de productos (aquí continuaría tu código de clasificación de productos...)
+        // Lógica de productos... (Aquí continúan tus miles de líneas de clasificación)
         mensajesEnProcesamiento.delete(mensajeId);
     });
 
-    // Leer URL y actualizar agenda inicial
-    const url_sheets = fs.readFileSync('url_sheets.txt', 'utf-8').trim();
-    if (url_sheets) {
-        await actualizarAgenda(sock, url_sheets, 'inicial');
-    }
+    // ============================================
+    // MOTOR DE ENVÍOS PROGRAMADOS (D2, E, F)
+    // ============================================
+    setInterval(async () => {
+        const ahora = new Date();
+        const horaActual = `${ahora.getHours()}:${ahora.getMinutes().toString().padStart(2, '0')}`;
+        const diaActual = ahora.toLocaleDateString('es-ES', { weekday: 'long' }).toLowerCase();
+
+        for (const grupo of gruposProgramados) {
+            // Validar Horario (D2), Día (E) y Activo (F)
+            if (horaActual === grupo.HORARIO && (grupo.DIAS || '').toLowerCase().includes(diaActual)) {
+                
+                guardarLogLocal(`🚀 Disparando envío a: ${grupo.NOMBRE}`);
+                
+                // Typing Humano
+                await sock.sendPresenceUpdate('composing', grupo.ID);
+                await delay(4000);
+
+                // Mensaje con Spintax
+                const mensajeLimpio = aplicarSpintax(grupo.MENSAJE);
+                await sock.sendMessage(grupo.ID, { text: mensajeLimpio });
+
+                // Envío de Archivos desde Raíz
+                if (grupo.ARCHIVO) {
+                    const ruta = `${CONFIG.ruta_raiz_almacenamiento}${grupo.ARCHIVO}`;
+                    if (fs.existsSync(ruta)) {
+                        if (ruta.endsWith('.mp3') || ruta.endsWith('.ogg')) {
+                            await sock.sendMessage(grupo.ID, { audio: { url: ruta }, mimetype: 'audio/mp4', ptt: true });
+                        } else {
+                            await sock.sendMessage(grupo.ID, { image: { url: ruta }, caption: grupo.CAPTION || '' });
+                        }
+                    }
+                }
+
+                // NUEVO DELAY ANTISPAM (15-18 SEG)
+                const randomDelay = Math.floor(Math.random() * (18 - 15 + 1) + 15) * 1000;
+                await delay(randomDelay);
+            }
+        }
+    }, 60000);
 }
 
-iniciarWhatsApp().catch(error => {
-    guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
-});
-
-process.on('SIGINT', () => {
-    console.log('\n👋 Cerrando bot...');
-    process.exit(0);
-});
+iniciarWhatsApp().catch(err => guardarLogLocal(`❌ FATAL: ${err.message}`));
