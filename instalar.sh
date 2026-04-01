@@ -2,71 +2,40 @@
 
 echo "===================================="
 echo "🚀 INSTALADOR WHATSAPP BOT v47.0"
-echo "📦 OPTIMIZADO PARA TERMUX (SOLUCIÓN ERROR 128)"
+echo "📦 MODO: ZERO-INSTALLATION + PAIRING"
 echo "===================================="
-echo ""
 
-# PASO 1: Instalar dependencias del sistema y compilación
-echo "📦 PASO 1: Instalando programas necesarios..."
-pkg update -y
-pkg upgrade -y
+# 1. Dependencias de sistema
+pkg update -y && pkg upgrade -y
 pkg install git nodejs-lts python make clang -y
 
-# PASO 2: Configurar Git para evitar Error 128 (Documentación Oficial Baileys)
-echo "🔧 PASO 2: Configurando protocolo Git seguro (HTTPS)..."
+# 2. Blindaje de Red (Solución Error 128)
 git config --global url."https://github.com/".insteadOf ssh://git@github.com/
 
-# PASO 3: Clonar el repositorio
-echo "📦 PASO 3: Descargando el repositorio..."
+# 3. Descarga Limpia
 rm -rf whatsapp-bot-termux 2>/dev/null
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
-cd whatsapp-bot-termux
+cd whatsapp-bot-termux/whatsapp-bot
 
-# PASO 4: Guardar la URL de Google Sheets
-echo ""
-echo "===================================="
-echo "🔗 URL DE GOOGLE SHEETS"
-echo "===================================="
-echo "📝 Escribe la URL y presiona Enter:"
-read USER_URL
-echo $USER_URL > url_sheets.txt
-
-# Crear carpeta del bot y mover archivos necesarios
-mkdir -p whatsapp-bot
-mv url_sheets.txt whatsapp-bot/url_sheets.txt
-
-# PASO 5: Instalar dependencias de Node.js desde cero
-echo ""
-echo "📦 PASO 4: Instalando librerías de Node (Instalación Limpia)..."
-cd whatsapp-bot
+# 4. Instalación de Librerías (Incluyendo readline para interacción)
 rm -rf node_modules package-lock.json
-
 npm init -y
-# Instalación completa de librerías
-npm install @whiskeysockets/baileys
-npm install @hapi/boom qrcode-terminal node-cron axios pino link-preview-js @rodrigogs/baileys-store
+npm install @whiskeysockets/baileys @hapi/boom qrcode-terminal node-cron axios pino link-preview-js @rodrigogs/baileys-store
 
-# PASO 6: Crear carpetas de sistema
+# 5. Creación de carpetas raíz
 mkdir -p logs
+mkdir -p /storage/emulated/0/WhatsAppBot/archivos
 
 echo ""
 echo "===================================="
 echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
-echo ""
-
-# PASO 7: Menú de inicio (Asegurando que aparezca)
-echo "🤖 El bot ya está instalado"
-echo ""
-echo "¿Quieres iniciar el bot AHORA?"
-echo "Escribe 1 y presiona Enter para INICIAR"
-echo "Escribe 2 y presiona Enter para SALIR"
+echo "Escribe 1 para INICIAR el proceso de vinculación"
+echo "Escribe 2 para SALIR"
 read OPCION
 
 if [ "$OPCION" == "1" ]; then
-    echo "🚀 Iniciando bot..."
     node bot.js
 else
-    echo "👋 Instalación terminada. Para iniciar después usa:"
-    echo "cd ~/whatsapp-bot-termux/whatsapp-bot && node bot.js"
+    echo "👋 Usa 'node bot.js' para vincular después."
 fi
