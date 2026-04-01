@@ -17,6 +17,7 @@ pkg install wget -y
 
 # PASO 2: Clonar el repositorio
 echo "📦 PASO 2: Descargando el bot..."
+cd $HOME
 rm -rf whatsapp-bot-termux 2>/dev/null
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
 cd whatsapp-bot-termux
@@ -35,13 +36,10 @@ echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
-mkdir -p whatsapp-bot
-echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias
+# PASO 4: Instalar dependencias (Sin link-preview-js para evitar errores)
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
-cd whatsapp-bot
 npm init -y
 npm install @whiskeysockets/baileys
 npm install @hapi/boom
@@ -49,7 +47,6 @@ npm install qrcode-terminal
 npm install node-cron
 npm install axios
 npm install pino
-npm install link-preview-js
 npm install @rodrigogs/baileys-store
 
 # PASO 5: Crear carpeta de logs
@@ -70,17 +67,18 @@ echo "Escribe 2 y presiona Enter para SALIR"
 echo ""
 read OPCION
 
-if [ "$OPCION" == "1" ]; then
+if [ "$OPCION" == "1" ];
+then
 echo ""
 echo "🚀 INICIANDO BOT..."
 echo "======================"
 echo ""
-cd whatsapp-bot
+cd $HOME/whatsapp-bot-termux
 node bot.js
 else
 echo ""
 echo "📝 Para iniciar el bot después:"
-echo "cd whatsapp-bot-termux/whatsapp-bot"
+echo "cd whatsapp-bot-termux"
 echo "node bot.js"
 echo ""
 fi
