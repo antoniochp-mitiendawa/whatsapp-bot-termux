@@ -1,11 +1,12 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 47.0 - CONFIG NEGOCIO + RESPUESTAS + SINÓNIMOS
-// BASE: VERSIÓN 46.1 (ESTABLE) + NUEVAS FUNCIONALIDADES
+// Versión: 48.0 - PAIRING FIX + MÚLTIPLES HOJAS + OPTIMIZACIÓN
 // ============================================
-// + MEJORA: MOTOR DE EMPAREJAMIENTO (PAIRING CODE)
-// + MEJORA: REGISTRO DE DUEÑO POST-VINCULACIÓN
-// + MEJORA: DELAY ANTISPAM DINÁMICO (15-18 SEG)
+// + CORRECCIÓN: PAIRING CODE ESPERA CONEXIÓN OPEN
+// + MEJORA: MÚLTIPLES HOJAS EN GOOGLE SHEETS
+// + MEJORA: PRÓXIMO HORARIO SIN REVISAR CADA MINUTO
+// + MEJORA: DELAY ANTISPAM 7-28 SEG
+// + MEJORA: REGISTRO DE DUEÑO CON CONFIRMACIÓN
 // ============================================
 
 const { 
@@ -13,28 +14,24 @@ const {
     useMultiFileAuthState, 
     DisconnectReason, 
     fetchLatestBaileysVersion, 
-    getUrlInfo, 
     Browsers,
     delay,
-    makeInMemoryStore,
-    jidDecode
+    makeInMemoryStore
 } = require('@whiskeysockets/baileys');
 const fs = require('fs');
 const pino = require('pino');
 const axios = require('axios');
 const { Boom } = require('@hapi/boom');
 const readline = require('readline');
-const nodeCron = require('node-cron');
 
-// CONFIGURACIÓN GLOBAL (PROTEGIDA)
+// CONFIGURACIÓN GLOBAL
 const CONFIG = {
     carpeta_logs: './logs',
     archivo_store: './baileys_store.json',
     archivo_dueno: './owner_number.txt',
     archivo_url: './url_sheets.txt',
-    delay_entre_archivos: 2,
-    tiempo_entre_mensajes_min: 15, // Actualizado a 15s
-    tiempo_entre_mensajes_max: 18, // Actualizado a 18s
+    delay_entre_envios_min: 7,
+    delay_entre_envios_max: 28,
     ruta_raiz_almacenamiento: '/storage/emulated/0/',
     textos_sinonimos: {
         saludos: ["¡Hola! 👋", "¡Buen día! ☀️", "¡Hola, gracias por contactarnos! 😊", "¡Un gusto saludarte! 🤝", "¡Gracias por comunicarte! ✨"],
@@ -53,23 +50,25 @@ const CONFIG = {
         email: ["email", "correo", "mail", "electrónico", "electronico", "e-mail"],
         web: ["web", "sitio", "página", "pagina", "website", "internet", "online"]
     },
-    delay_respuesta_min: 1, 
-    delay_respuesta_max: 3  
+    delay_respuesta_min: 1,
+    delay_respuesta_max: 3
 };
 
 // VARIABLES DE ESTADO
-let timersEnvios = []; 
-let configNegocio = {}; 
+let configNegocio = {};
 let productosCache = [];
-let gruposProgramados = [];
+let tareasProgramadas = [];
+let proximoHorario = null;
+let temporizadorActivo = false;
+let botJid = null;
 const mensajesEnProcesamiento = new Set();
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-if (!fs.existsSync(CONFIG.carpeta_logs)) {
-    fs.mkdirSync(CONFIG.carpeta_logs);
-}
-
+// FUNCIONES AUXILIARES
 function guardarLogLocal(mensaje) {
+    if (!fs.existsSync(CONFIG.carpeta_logs)) {
+        fs.mkdirSync(CONFIG.carpeta_logs, { recursive: true });
+    }
     const fecha = new Date().toLocaleString();
     const log = `[${fecha}] ${mensaje}\n`;
     fs.appendFileSync(`${CONFIG.carpeta_logs}/bot_log.txt`, log);
@@ -78,49 +77,6 @@ function guardarLogLocal(mensaje) {
 
 const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
-// ============================================
-// LÓGICA DE GOOGLE SHEETS (BLINDADA)
-// ============================================
-async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
-    try {
-        const response = await axios.get(url_sheets);
-        const data = response.data;
-
-        if (!data) {
-            guardarLogLocal("❌ Error: No se recibieron datos de la URL");
-            return false;
-        }
-
-        if (data.negocio) {
-            configNegocio = data.negocio;
-            guardarLogLocal(`🏢 Negocio: ${configNegocio.RAZON_SOCIAL || 'Cargado'}`);
-        }
-        
-        productosCache = data.productos || [];
-        
-        // Filtrar grupos (Columna E para días y F para activo)
-        if (data.envios) {
-            gruposProgramados = data.envios.filter(g => {
-                const activo = (g.ACTIVO || '').toUpperCase() === 'SI';
-                return activo;
-            });
-        }
-
-        guardarLogLocal(`✅ Sincronización Exitosa:`);
-        guardarLogLocal(`📦 Productos: ${productosCache.length}`);
-        guardarLogLocal(`👥 Grupos Activos: ${gruposProgramados.length}`);
-        guardarLogLocal(`⏰ Horario D2: ${data.horario_global || 'Pendiente'}`);
-        
-        return true;
-    } catch (error) {
-        guardarLogLocal(`❌ Error Sheets: ${error.message}`);
-        return false;
-    }
-}
-
-// ============================================
-// FUNCIONES DE INTERACCIÓN Y SPINTAX (INTEGRALES)
-// ============================================
 function obtenerSinonimo(tipo) {
     const lista = CONFIG.textos_sinonimos[tipo];
     return lista[Math.floor(Math.random() * lista.length)];
@@ -177,93 +133,372 @@ function generarRespuestaNegocio(tipoConsulta) {
 }
 
 // ============================================
-// MOTOR DE INICIO Y VINCULACIÓN
+// LÓGICA DE GOOGLE SHEETS CON MÚLTIPLES HOJAS
+// ============================================
+async function obtenerTodasLasHojas(url_sheets) {
+    try {
+        const response = await axios.get(url_sheets);
+        const data = response.data;
+        
+        if (!data) {
+            guardarLogLocal("❌ Error: No se recibieron datos de la URL");
+            return null;
+        }
+        
+        return data;
+    } catch (error) {
+        guardarLogLocal(`❌ Error Sheets: ${error.message}`);
+        return null;
+    }
+}
+
+function identificarHojasDeEnvios(data) {
+    const hojasEnvios = [];
+    const encabezadosRequeridos = ['HORARIO', 'DIAS', 'ID', 'NOMBRE', 'MENSAJE', 'ARCHIVO', 'CAPTION', 'ACTIVO'];
+    
+    for (const [nombreHoja, contenido] of Object.entries(data)) {
+        if (contenido && Array.isArray(contenido) && contenido.length > 0) {
+            const primerFila = contenido[0];
+            const tieneEncabezados = encabezadosRequeridos.every(enc => primerFila.hasOwnProperty(enc));
+            if (tieneEncabezados) {
+                hojasEnvios.push({
+                    nombre: nombreHoja,
+                    datos: contenido.slice(1).filter(row => row.ACTIVO && row.ACTIVO.toUpperCase() === 'SI')
+                });
+                guardarLogLocal(`📄 Hoja detectada: ${nombreHoja} - ${hojasEnvios[hojasEnvios.length-1].datos.length} grupos activos`);
+            }
+        }
+    }
+    
+    return hojasEnvios;
+}
+
+function consolidarTareas(hojasEnvios) {
+    const todasTareas = [];
+    
+    for (const hoja of hojasEnvios) {
+        for (const grupo of hoja.datos) {
+            if (grupo.HORARIO && grupo.DIAS && grupo.ID) {
+                todasTareas.push({
+                    id: grupo.ID,
+                    nombre: grupo.NOMBRE || 'Sin nombre',
+                    horario: grupo.HORARIO,
+                    dias: grupo.DIAS.toLowerCase(),
+                    mensaje: grupo.MENSAJE || '',
+                    archivo: grupo.ARCHIVO || null,
+                    caption: grupo.CAPTION || '',
+                    hojaOrigen: hoja.nombre
+                });
+            }
+        }
+    }
+    
+    guardarLogLocal(`📋 Total tareas consolidadas: ${todasTareas.length}`);
+    return todasTareas;
+}
+
+async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
+    guardarLogLocal(`🔄 Sincronizando agenda (${origen})...`);
+    
+    const data = await obtenerTodasLasHojas(url_sheets);
+    if (!data) return false;
+    
+    // Cargar configuración del negocio
+    if (data.negocio) {
+        configNegocio = data.negocio;
+        guardarLogLocal(`🏢 Negocio: ${configNegocio.RAZON_SOCIAL || 'Cargado'}`);
+    }
+    
+    // Cargar productos
+    productosCache = data.productos || [];
+    guardarLogLocal(`📦 Productos: ${productosCache.length}`);
+    
+    // Identificar y consolidar tareas de envío
+    const hojasEnvios = identificarHojasDeEnvios(data);
+    tareasProgramadas = consolidarTareas(hojasEnvios);
+    
+    // Reiniciar el programador
+    reiniciarProgramador(sock);
+    
+    guardarLogLocal(`✅ Sincronización completada`);
+    return true;
+}
+
+// ============================================
+// PROGRAMADOR OPTIMIZADO (PRÓXIMO HORARIO)
+// ============================================
+function obtenerProximoHorario(tareas) {
+    const ahora = new Date();
+    const horaActual = ahora.getHours();
+    const minutoActual = ahora.getMinutes();
+    const minutosActuales = horaActual * 60 + minutoActual;
+    const diaActual = ahora.toLocaleDateString('es-ES', { weekday: 'long' }).toLowerCase();
+    
+    let horarioMasCercano = null;
+    let diferenciaMinima = Infinity;
+    
+    for (const tarea of tareas) {
+        // Verificar si el día actual está incluido
+        if (!tarea.dias.includes(diaActual)) continue;
+        
+        // Parsear horario (formato HH:MM)
+        const [horaStr, minutoStr] = tarea.horario.split(':');
+        const horaTarea = parseInt(horaStr);
+        const minutoTarea = parseInt(minutoStr);
+        const minutosTarea = horaTarea * 60 + minutoTarea;
+        
+        // Si el horario ya pasó hoy, ignorar
+        if (minutosTarea <= minutosActuales) continue;
+        
+        const diferencia = minutosTarea - minutosActuales;
+        if (diferencia < diferenciaMinima) {
+            diferenciaMinima = diferencia;
+            horarioMasCercano = {
+                horario: tarea.horario,
+                diferenciaMinutos: diferencia,
+                tareasEnEsteHorario: [tarea]
+            };
+        } else if (diferencia === diferenciaMinima && horarioMasCercano) {
+            horarioMasCercano.tareasEnEsteHorario.push(tarea);
+        }
+    }
+    
+    return horarioMasCercano;
+}
+
+function ejecutarEnvios(sock, tareasDelHorario) {
+    guardarLogLocal(`🚀 Ejecutando ${tareasDelHorario.length} envíos para horario ${tareasDelHorario[0].horario}`);
+    
+    (async () => {
+        for (let i = 0; i < tareasDelHorario.length; i++) {
+            const grupo = tareasDelHorario[i];
+            
+            try {
+                guardarLogLocal(`📤 Enviando a: ${grupo.nombre} (${grupo.id})`);
+                
+                // Simular escritura
+                await sock.sendPresenceUpdate('composing', grupo.id);
+                await delay(4000);
+                
+                // Enviar mensaje con spintax
+                const mensajeLimpio = aplicarSpintax(grupo.mensaje);
+                await sock.sendMessage(grupo.id, { text: mensajeLimpio });
+                
+                // Enviar archivo si existe
+                if (grupo.archivo) {
+                    const ruta = `${CONFIG.ruta_raiz_almacenamiento}${grupo.archivo}`;
+                    if (fs.existsSync(ruta)) {
+                        if (ruta.endsWith('.mp3') || ruta.endsWith('.ogg')) {
+                            await sock.sendMessage(grupo.id, { audio: { url: ruta }, mimetype: 'audio/mp4', ptt: true });
+                        } else if (ruta.endsWith('.mp4')) {
+                            await sock.sendMessage(grupo.id, { video: { url: ruta }, caption: grupo.caption || '' });
+                        } else {
+                            await sock.sendMessage(grupo.id, { image: { url: ruta }, caption: grupo.caption || '' });
+                        }
+                    } else {
+                        guardarLogLocal(`⚠️ Archivo no encontrado: ${ruta}`);
+                    }
+                }
+                
+                // Delay entre envíos (7-28 segundos)
+                if (i < tareasDelHorario.length - 1) {
+                    const delayEntre = Math.floor(Math.random() * (CONFIG.delay_entre_envios_max - CONFIG.delay_entre_envios_min + 1) + CONFIG.delay_entre_envios_min) * 1000;
+                    await delay(delayEntre);
+                }
+                
+            } catch (error) {
+                guardarLogLocal(`❌ Error enviando a ${grupo.nombre}: ${error.message}`);
+            }
+        }
+        
+        guardarLogLocal(`✅ Envíos completados para horario ${tareasDelHorario[0].horario}`);
+        
+        // Después de ejecutar, reiniciar el programador para calcular el próximo horario
+        reiniciarProgramador(sock);
+    })();
+}
+
+function reiniciarProgramador(sock) {
+    if (temporizadorActivo) {
+        clearTimeout(temporizadorActivo);
+        temporizadorActivo = null;
+    }
+    
+    if (!tareasProgramadas || tareasProgramadas.length === 0) {
+        guardarLogLocal("⏸️ No hay tareas programadas, esperando sincronización...");
+        return;
+    }
+    
+    const proximo = obtenerProximoHorario(tareasProgramadas);
+    
+    if (!proximo) {
+        guardarLogLocal("⏸️ No hay más horarios programados para hoy. Esperando próximo día...");
+        // Programar para revisar al día siguiente (24 horas)
+        temporizadorActivo = setTimeout(() => {
+            reiniciarProgramador(sock);
+        }, 24 * 60 * 60 * 1000);
+        return;
+    }
+    
+    const tiempoEsperaMs = proximo.diferenciaMinutos * 60 * 1000;
+    guardarLogLocal(`⏰ Próximo envío en ${proximo.diferenciaMinutos} minutos (${proximo.horario}) - ${proximo.tareasEnEsteHorario.length} tareas`);
+    
+    temporizadorActivo = setTimeout(() => {
+        ejecutarEnvios(sock, proximo.tareasEnEsteHorario);
+    }, tiempoEsperaMs);
+}
+
+// ============================================
+// REGISTRO DE DUEÑO CON CONFIRMACIÓN
+// ============================================
+async function registrarDueno(sock, numeroDueno) {
+    const jidTentativo = numeroDueno.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+    
+    guardarLogLocal(`📨 Enviando solicitud de confirmación al dueño...`);
+    
+    await sock.sendMessage(jidTentativo, {
+        text: "🔐 *Confirmación de Dueño*\n\nPor favor, responde este mensaje con:\n\n*soy el dueño*\n\nPara confirmar que eres el administrador del bot."
+    });
+    
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            guardarLogLocal("⏰ Tiempo de espera agotado para confirmación del dueño");
+            resolve(null);
+        }, 120000); // 2 minutos de espera
+        
+        const handler = (msg) => {
+            const mensaje = msg.messages[0];
+            if (!mensaje.message || mensaje.key.fromMe) return;
+            
+            const remitente = mensaje.key.remoteJid;
+            const texto = (mensaje.message.conversation || mensaje.message.extendedTextMessage?.text || "").toLowerCase();
+            
+            // Verificar si es el número que esperamos
+            if (remitente === jidTentativo && texto.includes("soy el dueño")) {
+                clearTimeout(timeout);
+                sock.ev.off('messages.upsert', handler);
+                
+                const jidReal = remitente;
+                fs.writeFileSync(CONFIG.archivo_dueno, jidReal);
+                guardarLogLocal(`✅ Dueño registrado correctamente: ${jidReal}`);
+                
+                sock.sendMessage(jidReal, { text: "✅ *Confirmación exitosa*\n\nYa eres el dueño del bot. Usa el comando *actualizar* para sincronizar datos." });
+                resolve(jidReal);
+            }
+        };
+        
+        sock.ev.on('messages.upsert', handler);
+    });
+}
+
+// ============================================
+// FUNCIÓN PRINCIPAL DE INICIO
 // ============================================
 async function iniciarWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // Forzar Pairing Code
+        printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'),
         logger: pino({ level: 'silent' })
     });
-
-    // PASO 1: VINCULACIÓN POR CÓDIGO
-    if (!sock.authState.creds.registered) {
-        console.log('\n====================================');
-        console.log('📱 CONFIGURACIÓN DE NÚMERO BOT');
-        console.log('====================================');
-        const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
-        const code = await sock.requestPairingCode(numeroBot.replace(/[^0-9]/g, ''));
-        console.log(`\n🔑 CÓDIGO DE VINCULACIÓN: ${code}\n`);
-    }
-
+    
     sock.ev.on('creds.update', saveCreds);
-
+    
+    // Bandera para controlar que solo se pida el número una vez
+    let pairingSolicitado = false;
+    
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         
         if (connection === 'open') {
             guardarLogLocal('✅ Conexión establecida con WhatsApp');
-
-            // PASO 2: REGISTRO DEL DUEÑO (Si no existe)
-            if (!fs.existsSync(CONFIG.archivo_dueno)) {
-                const numDueno = await question('👤 Escribe el número del DUEÑO (ej: 52155...): ');
-                const jidDueno = numDueno.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                fs.writeFileSync(CONFIG.archivo_dueno, jidDueno);
-                
-                await sock.sendMessage(jidDueno, { 
-                    text: '✅ *Bot Activado:* Eres el dueño oficial. Comandos: *actualizar*' 
-                });
+            
+            // Obtener el JID del bot
+            const authState = await useMultiFileAuthState('auth_info_baileys');
+            if (authState.state.creds.me) {
+                botJid = authState.state.creds.me.id;
+                guardarLogLocal(`🤖 Bot ID: ${botJid}`);
             }
-
-            // Sincronización Inicial
+            
+            // Verificar si ya existe dueño registrado
+            if (!fs.existsSync(CONFIG.archivo_dueno)) {
+                guardarLogLocal("👤 No hay dueño registrado. Iniciando registro...");
+                
+                const numDueno = await question('👤 Escribe el número del DUEÑO (ej: 52155...): ');
+                const jidRegistrado = await registrarDueno(sock, numDueno);
+                
+                if (!jidRegistrado) {
+                    guardarLogLocal("❌ No se pudo registrar al dueño. El bot se cerrará.");
+                    process.exit(1);
+                }
+            }
+            
+            // Sincronización inicial con Google Sheets
             if (fs.existsSync(CONFIG.archivo_url)) {
                 const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
                 await actualizarAgenda(sock, url, 'inicial');
+            } else {
+                guardarLogLocal("⚠️ No se encontró archivo de URL de Google Sheets");
             }
         }
-
+        
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
+            guardarLogLocal(`❌ Conexión cerrada. Razón: ${reason}`);
             if (reason !== DisconnectReason.loggedOut) {
-                iniciarWhatsApp();
+                guardarLogLocal("🔄 Reconectando en 5 segundos...");
+                setTimeout(() => iniciarWhatsApp(), 5000);
             }
         }
     });
-
-    // ============================================
-    // PROCESAMIENTO DE MENSAJES (v47.0 COMPLETA)
-    // ============================================
+    
+    // PROCESAMIENTO DE MENSAJES
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
-
+        
         const remitente = msg.key.remoteJid;
         if (remitente === 'status@broadcast') return;
-
+        
         const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
         const usuarioId = msg.key.participant || remitente;
         const mensajeId = msg.key.id;
-
+        
         if (mensajesEnProcesamiento.has(mensajeId)) return;
         mensajesEnProcesamiento.add(mensajeId);
-
-        // Validar si es el dueño
+        
+        // Verificar si es el dueño
         const jidDueno = fs.existsSync(CONFIG.archivo_dueno) ? fs.readFileSync(CONFIG.archivo_dueno, 'utf-8').trim() : null;
         const esDueno = remitente === jidDueno;
-
+        
+        // Comando actualizar (solo dueño)
         if (esDueno && texto === 'actualizar') {
             const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
-            await sock.sendMessage(remitente, { text: '🔄 Sincronizando...' });
+            await sock.sendMessage(remitente, { text: '🔄 Sincronizando agenda...' });
             await actualizarAgenda(sock, url, 'manual');
-            await sock.sendMessage(remitente, { text: '✅ Base de datos actualizada.' });
+            await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente.' });
             mensajesEnProcesamiento.delete(mensajeId);
             return;
         }
-
-        // LÓGICA DE NEGOCIO (SIN MODIFICAR)
+        
+        // Respuesta a menciones o respuestas al bot
+        const esMencion = botEsMencionado(msg.message, botJid);
+        const esRespuesta = esRespuestaABot(msg.message, botJid);
+        
+        if (esMencion || esRespuesta) {
+            const respuestaAgradecimiento = obtenerSinonimo('agradecimientos');
+            const mencion = `@${usuarioId.split('@')[0]} ${respuestaAgradecimiento}`;
+            
+            await sock.sendPresenceUpdate('composing', remitente);
+            await delay(2000);
+            await sock.sendMessage(remitente, { text: mencion, mentions: [usuarioId] });
+            mensajesEnProcesamiento.delete(mensajeId);
+            return;
+        }
+        
+        // Lógica de consultas de negocio
         const tipoNegocio = clasificarConsultaNegocio(texto);
         if (tipoNegocio) {
             const respuesta = generarRespuestaNegocio(tipoNegocio);
@@ -271,56 +506,52 @@ async function iniciarWhatsApp() {
             
             await sock.sendPresenceUpdate('composing', remitente);
             await delay(2000);
-            
             await sock.sendMessage(remitente, { text: mencion, mentions: [usuarioId] });
             mensajesEnProcesamiento.delete(mensajeId);
             return;
         }
-
-        // Lógica de productos... (Aquí continúan tus miles de líneas de clasificación)
+        
         mensajesEnProcesamiento.delete(mensajeId);
     });
-
-    // ============================================
-    // MOTOR DE ENVÍOS PROGRAMADOS (D2, E, F)
-    // ============================================
-    setInterval(async () => {
-        const ahora = new Date();
-        const horaActual = `${ahora.getHours()}:${ahora.getMinutes().toString().padStart(2, '0')}`;
-        const diaActual = ahora.toLocaleDateString('es-ES', { weekday: 'long' }).toLowerCase();
-
-        for (const grupo of gruposProgramados) {
-            // Validar Horario (D2), Día (E) y Activo (F)
-            if (horaActual === grupo.HORARIO && (grupo.DIAS || '').toLowerCase().includes(diaActual)) {
-                
-                guardarLogLocal(`🚀 Disparando envío a: ${grupo.NOMBRE}`);
-                
-                // Typing Humano
-                await sock.sendPresenceUpdate('composing', grupo.ID);
-                await delay(4000);
-
-                // Mensaje con Spintax
-                const mensajeLimpio = aplicarSpintax(grupo.MENSAJE);
-                await sock.sendMessage(grupo.ID, { text: mensajeLimpio });
-
-                // Envío de Archivos desde Raíz
-                if (grupo.ARCHIVO) {
-                    const ruta = `${CONFIG.ruta_raiz_almacenamiento}${grupo.ARCHIVO}`;
-                    if (fs.existsSync(ruta)) {
-                        if (ruta.endsWith('.mp3') || ruta.endsWith('.ogg')) {
-                            await sock.sendMessage(grupo.ID, { audio: { url: ruta }, mimetype: 'audio/mp4', ptt: true });
-                        } else {
-                            await sock.sendMessage(grupo.ID, { image: { url: ruta }, caption: grupo.CAPTION || '' });
-                        }
+    
+    // PAIRING CODE - ESPERAR CONEXIÓN ANTES DE SOLICITAR
+    // Verificar si no hay sesión guardada
+    const credsPath = 'auth_info_baileys/creds.json';
+    if (!fs.existsSync(credsPath)) {
+        console.log('\n====================================');
+        console.log('📱 CONFIGURACIÓN DE NÚMERO BOT');
+        console.log('====================================');
+        const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
+        
+        // Esperar a que el socket esté conectado antes de solicitar pairing code
+        const esperarConexion = () => {
+            return new Promise((resolve) => {
+                const checkConnection = (update) => {
+                    if (update.connection === 'open') {
+                        sock.ev.off('connection.update', checkConnection);
+                        resolve();
                     }
-                }
-
-                // NUEVO DELAY ANTISPAM (15-18 SEG)
-                const randomDelay = Math.floor(Math.random() * (18 - 15 + 1) + 15) * 1000;
-                await delay(randomDelay);
-            }
+                };
+                sock.ev.on('connection.update', checkConnection);
+                
+                // Timeout por si no se conecta
+                setTimeout(() => resolve(), 30000);
+            });
+        };
+        
+        await esperarConexion();
+        
+        try {
+            const code = await sock.requestPairingCode(numeroBot.replace(/[^0-9]/g, ''));
+            console.log(`\n🔑 CÓDIGO DE VINCULACIÓN: ${code}\n`);
+            console.log('📱 Abre WhatsApp en tu teléfono → Dispositivos vinculados → Vincular con código de 8 dígitos\n');
+        } catch (error) {
+            guardarLogLocal(`❌ Error al solicitar pairing code: ${error.message}`);
         }
-    }, 60000);
+    } else {
+        guardarLogLocal("🔑 Sesión existente encontrada, iniciando directamente...");
+    }
 }
 
+// INICIAR BOT
 iniciarWhatsApp().catch(err => guardarLogLocal(`❌ FATAL: ${err.message}`));
