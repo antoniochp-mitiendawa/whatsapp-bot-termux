@@ -17,7 +17,7 @@ pkg install wget -y
 
 # PASO 2: Clonar el repositorio
 echo "📦 PASO 2: Descargando el bot..."
-cd $HOME
+# Limpiamos instalaciones previas para asegurar que la carpeta sea la correcta
 rm -rf whatsapp-bot-termux 2>/dev/null
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
 cd whatsapp-bot-termux
@@ -36,10 +36,15 @@ echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
+# Mantenemos tu lógica de duplicar el archivo de url en la subcarpeta
+mkdir -p whatsapp-bot
+echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias (Sin link-preview-js para evitar errores)
+# PASO 4: Instalar dependencias
 echo ""
 echo "📦 PASO 3: Instalando librerías..."
+# Entramos a la carpeta donde reside el bot.js para que npm instale ahí
+cd whatsapp-bot
 npm init -y
 npm install @whiskeysockets/baileys
 npm install @hapi/boom
@@ -47,6 +52,7 @@ npm install qrcode-terminal
 npm install node-cron
 npm install axios
 npm install pino
+# Se omite link-preview-js por el error de compatibilidad ERESOLVE detectado
 npm install @rodrigogs/baileys-store
 
 # PASO 5: Crear carpeta de logs
@@ -73,12 +79,13 @@ echo ""
 echo "🚀 INICIANDO BOT..."
 echo "======================"
 echo ""
-cd $HOME/whatsapp-bot-termux
+# Ajuste de ruta: asegurar que entra a la carpeta correcta antes de node bot.js
+cd $HOME/whatsapp-bot-termux/whatsapp-bot
 node bot.js
 else
 echo ""
 echo "📝 Para iniciar el bot después:"
-echo "cd whatsapp-bot-termux"
+echo "cd whatsapp-bot-termux/whatsapp-bot"
 echo "node bot.js"
 echo ""
 fi
