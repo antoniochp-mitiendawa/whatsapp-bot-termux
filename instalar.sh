@@ -2,27 +2,28 @@
 
 echo "===================================="
 echo "🚀 INSTALADOR WHATSAPP BOT v47.0"
-echo "🚀 INSTALADOR WHATSAPP BOT v46.1"
+echo "📦 OPTIMIZADO PARA TERMUX (SIN SSH)"
 echo "===================================="
 echo ""
 
-# PASO 1: Instalar lo básico
+# PASO 1: Instalar dependencias del sistema y compilación
 echo "📦 PASO 1: Instalando programas necesarios..."
 pkg update -y
-pkg install git -y
-pkg install nodejs-lts -y
-pkg install yarn -y
-pkg install cronie termux-services -y
-pkg install wget -y
+pkg upgrade -y
+pkg install git nodejs-lts python make clang -y
 
-# PASO 2: Clonar el repositorio
-echo "📦 PASO 2: Descargando el bot..."
-# Limpiamos instalaciones previas para asegurar que la carpeta sea la correcta
+# PASO 2: Configurar Git para evitar Error 128 (Documentación Oficial)
+# Esto fuerza a usar HTTPS en lugar de SSH para las dependencias de Baileys
+echo "🔧 PASO 2: Configurando protocolo Git seguro..."
+git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+
+# PASO 3: Clonar el repositorio
+echo "📦 PASO 3: Descargando el repositorio..."
 rm -rf whatsapp-bot-termux 2>/dev/null
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
 cd whatsapp-bot-termux
 
-# PASO 3: Guardar la URL
+# PASO 4: Guardar la URL de Google Sheets
 echo ""
 echo "===================================="
 echo "🔗 URL DE GOOGLE SHEETS"
@@ -36,26 +37,24 @@ echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
-# Mantenemos tu lógica de duplicar el archivo de url en la subcarpeta
+
+# Crear carpeta del bot si no existe y copiar la URL
 mkdir -p whatsapp-bot
 echo $USER_URL > whatsapp-bot/url_sheets.txt
 
-# PASO 4: Instalar dependencias
+# PASO 5: Instalar dependencias de Node.js
 echo ""
-echo "📦 PASO 3: Instalando librerías..."
-# Entramos a la carpeta donde reside el bot.js para que npm instale ahí
+echo "📦 PASO 4: Instalando librerías de Node..."
 cd whatsapp-bot
-npm init -y
-npm install @whiskeysockets/baileys
-npm install @hapi/boom
-npm install qrcode-terminal
-npm install node-cron
-npm install axios
-npm install pino
-# Se omite link-preview-js por el error de compatibilidad ERESOLVE detectado
-npm install @rodrigogs/baileys-store
+# Limpieza previa para instalación limpia
+rm -rf node_modules package-lock.json
 
-# PASO 5: Crear carpeta de logs
+npm init -y
+# Instalación de Baileys y dependencias críticas
+npm install @whiskeysockets/baileys
+npm install @hapi/boom qrcode-terminal node-cron axios pino link-preview-js @rodrigogs/baileys-store
+
+# PASO 6: Crear carpetas de sistema
 mkdir -p /storage/emulated/0/WhatsAppBot/logs
 
 echo ""
@@ -64,28 +63,18 @@ echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
 
-# PASO 6: Preguntar si quiere iniciar
+# PASO 7: Menú de inicio
 echo "🤖 El bot ya está instalado"
 echo ""
 echo "¿Quieres iniciar el bot AHORA?"
 echo "Escribe 1 y presiona Enter para INICIAR"
 echo "Escribe 2 y presiona Enter para SALIR"
-echo ""
 read OPCION
 
-if [ "$OPCION" == "1" ];
-then
-echo ""
-echo "🚀 INICIANDO BOT..."
-echo "======================"
-echo ""
-# Ajuste de ruta: asegurar que entra a la carpeta correcta antes de node bot.js
-cd $HOME/whatsapp-bot-termux/whatsapp-bot
-node bot.js
+if [ "$OPCION" == "1" ]; then
+    echo "🚀 Iniciando bot..."
+    node bot.js
 else
-echo ""
-echo "📝 Para iniciar el bot después:"
-echo "cd whatsapp-bot-termux/whatsapp-bot"
-echo "node bot.js"
-echo ""
+    echo "👋 Instalación terminada. Para iniciar después usa:"
+    echo "cd ~/whatsapp-bot-termux/whatsapp-bot && node bot.js"
 fi
