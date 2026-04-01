@@ -304,8 +304,31 @@ async function iniciarWhatsApp() {
     
     sock.ev.on('creds.update', saveCreds);
     
+    // Variable para controlar que solo se pida el número una vez
+    let pairingSolicitado = false;
+    
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        // CORRECCIÓN: Solicitar pairing code cuando se recibe el evento 'qr'
+        // Esto es lo que indica la documentación oficial de Baileys
+        if (qr && !pairingSolicitado) {
+            pairingSolicitado = true;
+            
+            console.log('\n====================================');
+            console.log('📱 CONFIGURACIÓN DE NÚMERO BOT');
+            console.log('====================================');
+            const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
+            
+            try {
+                const code = await sock.requestPairingCode(numeroBot.replace(/[^0-9]/g, ''));
+                console.log(`\n🔑 CÓDIGO DE VINCULACIÓN: ${code}\n`);
+                console.log('📱 Abre WhatsApp en tu teléfono → Dispositivos vinculados → Vincular con código de 8 dígitos\n');
+                guardarLogLocal(`✅ Código de emparejamiento generado: ${code}`);
+            } catch (error) {
+                guardarLogLocal(`❌ Error al solicitar pairing code: ${error.message}`);
+            }
+        }
         
         if (connection === 'open') {
             guardarLogLocal('✅ Conexión establecida con WhatsApp');
@@ -333,7 +356,9 @@ async function iniciarWhatsApp() {
         
         if (connection === 'close') {
             const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
+            guardarLogLocal(`❌ Conexión cerrada. Razón: ${reason}`);
             if (reason !== DisconnectReason.loggedOut) {
+                guardarLogLocal("🔄 Reconectando en 5 segundos...");
                 setTimeout(() => iniciarWhatsApp(), 5000);
             }
         }
@@ -386,34 +411,6 @@ async function iniciarWhatsApp() {
         
         mensajesEnProcesamiento.delete(mensajeId);
     });
-    
-    const credsPath = 'auth_info_baileys/creds.json';
-    if (!fs.existsSync(credsPath)) {
-        console.log('\n====================================');
-        console.log('📱 CONFIGURACIÓN DE NÚMERO BOT');
-        console.log('====================================');
-        const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
-        
-        await new Promise((resolve) => {
-            const checkConnection = (update) => {
-                if (update.connection === 'open') {
-                    sock.ev.off('connection.update', checkConnection);
-                    resolve();
-                }
-            };
-            sock.ev.on('connection.update', checkConnection);
-            setTimeout(resolve, 30000);
-        });
-        
-        try {
-            const code = await sock.requestPairingCode(numeroBot.replace(/[^0-9]/g, ''));
-            console.log(`\n🔑 CÓDIGO DE VINCULACIÓN: ${code}\n`);
-        } catch (error) {
-            guardarLogLocal(`❌ Error al solicitar pairing code: ${error.message}`);
-        }
-    } else {
-        guardarLogLocal("🔑 Sesión existente encontrada");
-    }
 }
 
 iniciarWhatsApp().catch(err => guardarLogLocal(`❌ FATAL: ${err.message}`));
