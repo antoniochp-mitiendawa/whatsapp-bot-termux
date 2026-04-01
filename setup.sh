@@ -1,28 +1,61 @@
 #!/bin/bash
 
 echo "===================================="
-echo "⚙️  CONFIGURACIÓN RÁPIDA v48.0"
+echo "CONFIGURANDO WHATSAPP BOT"
 echo "===================================="
+echo ""
 
-# Verificar si ya existe la URL
-if [ -f "url_sheets.txt" ]; then
-    echo "✅ Archivo url_sheets.txt encontrado"
-    URL_SHEETS=$(cat url_sheets.txt)
-    echo "URL configurada: ${URL_SHEETS:0:50}..."
-else
-    echo "🔗 No se encontró URL, por favor ingrésala:"
-    read URL_SHEETS
-    echo $URL_SHEETS > url_sheets.txt
-    echo "✅ URL guardada"
-fi
+# PASO 1: Actualizar Termux
+echo "📦 PASO 1: Actualizando Termux..."
+pkg update -y
+pkg upgrade -y
 
-# Verificar carpetas
-mkdir -p logs auth_info_baileys
+# PASO 2: Instalar Git
+echo "📦 PASO 2: Instalando Git..."
+pkg install git -y
+
+# PASO 3: Instalar Node.js
+echo "📦 PASO 3: Instalando Node.js..."
+pkg install nodejs -y
+
+# PASO 4: Instalar yarn
+echo "📦 PASO 4: Instalando Yarn..."
+pkg install yarn -y
+
+# PASO 5: Crear carpeta para el bot
+echo "📦 PASO 5: Creando carpeta del bot..."
+mkdir -p whatsapp-bot
+
+# PASO 6: Entrar a la carpeta
+cd whatsapp-bot
+
+# PASO 7: Inicializar proyecto Node.js
+echo "📦 PASO 6: Preparando proyecto..."
+npm init -y
+
+# PASO 8: Instalar Baileys
+echo "📦 PASO 7: Instalando Baileys..."
+npm install @whiskeysockets/baileys
+
+# PASO 9: Instalar otras librerías útiles
+echo "📦 PASO 8: Instalando librerías adicionales..."
+npm install qrcode-terminal
+npm install node-cron
+npm install axios
+npm install @hapi/boom
+npm install pino
+npm install link-preview-js
+npm install @rodrigogs/baileys-store
 
 echo ""
 echo "===================================="
 echo "✅ CONFIGURACIÓN COMPLETA"
 echo "===================================="
 echo ""
-echo "Inicia el bot con: node bot.js"
+echo "Todo está instalado correctamente."
+echo "El bot está en la carpeta: whatsapp-bot"
+echo ""
+echo "Para iniciar el bot escribe:"
+echo "cd whatsapp-bot"
+echo "node bot.js"
 echo ""
