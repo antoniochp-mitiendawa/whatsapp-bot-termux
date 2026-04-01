@@ -1,3 +1,65 @@
+#!/bin/bash
+
+echo "===================================="
+echo "🚀 INSTALADOR WHATSAPP BOT v48.0"
+echo "📦 MODO: PAIRING FIX + MÚLTIPLES HOJAS"
+echo "===================================="
+
+# 1. Dependencias de sistema
+echo "📦 Instalando dependencias del sistema..."
+pkg update -y && pkg upgrade -y
+pkg install git nodejs-lts python make clang -y
+
+# 2. Blindaje de Red (Solución Error 128)
+echo "🔧 Configurando Git..."
+git config --global url."https://github.com/".insteadOf ssh://git@github.com/
+
+# 3. Crear carpeta del bot
+echo "📁 Creando carpeta del bot..."
+mkdir -p whatsapp-bot
+cd whatsapp-bot
+
+# 4. Inicializar proyecto Node.js
+echo "📦 Inicializando proyecto..."
+npm init -y
+
+# 5. Instalación de librerías
+echo "📦 Instalando librerías..."
+npm install @whiskeysockets/baileys@6.7.5
+npm install @hapi/boom
+npm install qrcode-terminal
+npm install node-cron
+npm install axios
+npm install pino
+
+# 6. Creación de carpetas necesarias
+echo "📁 Creando carpetas..."
+mkdir -p logs
+mkdir -p auth_info_baileys
+mkdir -p /storage/emulated/0/WhatsAppBot/archivos
+
+# 7. Solicitar URL de Google Sheets
+echo ""
+echo "===================================="
+echo "🔗 CONFIGURACIÓN DE GOOGLE SHEETS"
+echo "===================================="
+echo "1. Abre Google Sheets"
+echo "2. Ve al menú 'Control WhatsApp'"
+echo "3. Haz clic en 'Obtener URL de Webhook'"
+echo "4. Copia la URL que aparece"
+echo "===================================="
+echo ""
+echo "✏️  Pega la URL de Google Sheets:"
+read URL_SHEETS
+
+echo $URL_SHEETS > url_sheets.txt
+echo ""
+echo "✅ URL guardada correctamente"
+
+# 8. Crear archivo bot.js con el código real
+echo "📝 Creando archivo bot.js..."
+
+cat > bot.js << 'EOF'
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
 // Versión: 48.0 - PAIRING FIX + MÚLTIPLES HOJAS + OPTIMIZACIÓN
@@ -238,16 +300,13 @@ function obtenerProximoHorario(tareas) {
     let diferenciaMinima = Infinity;
     
     for (const tarea of tareas) {
-        // Verificar si el día actual está incluido
         if (!tarea.dias.includes(diaActual)) continue;
         
-        // Parsear horario (formato HH:MM)
         const [horaStr, minutoStr] = tarea.horario.split(':');
         const horaTarea = parseInt(horaStr);
         const minutoTarea = parseInt(minutoStr);
         const minutosTarea = horaTarea * 60 + minutoTarea;
         
-        // Si el horario ya pasó hoy, ignorar
         if (minutosTarea <= minutosActuales) continue;
         
         const diferencia = minutosTarea - minutosActuales;
@@ -276,15 +335,12 @@ function ejecutarEnvios(sock, tareasDelHorario) {
             try {
                 guardarLogLocal(`📤 Enviando a: ${grupo.nombre} (${grupo.id})`);
                 
-                // Simular escritura
                 await sock.sendPresenceUpdate('composing', grupo.id);
                 await delay(4000);
                 
-                // Enviar mensaje con spintax
                 const mensajeLimpio = aplicarSpintax(grupo.mensaje);
                 await sock.sendMessage(grupo.id, { text: mensajeLimpio });
                 
-                // Enviar archivo si existe
                 if (grupo.archivo) {
                     const ruta = `${CONFIG.ruta_raiz_almacenamiento}${grupo.archivo}`;
                     if (fs.existsSync(ruta)) {
@@ -300,7 +356,6 @@ function ejecutarEnvios(sock, tareasDelHorario) {
                     }
                 }
                 
-                // Delay entre envíos (7-28 segundos)
                 if (i < tareasDelHorario.length - 1) {
                     const delayEntre = Math.floor(Math.random() * (CONFIG.delay_entre_envios_max - CONFIG.delay_entre_envios_min + 1) + CONFIG.delay_entre_envios_min) * 1000;
                     await delay(delayEntre);
@@ -312,8 +367,6 @@ function ejecutarEnvios(sock, tareasDelHorario) {
         }
         
         guardarLogLocal(`✅ Envíos completados para horario ${tareasDelHorario[0].horario}`);
-        
-        // Después de ejecutar, reiniciar el programador para calcular el próximo horario
         reiniciarProgramador(sock);
     })();
 }
@@ -333,7 +386,6 @@ function reiniciarProgramador(sock) {
     
     if (!proximo) {
         guardarLogLocal("⏸️ No hay más horarios programados para hoy. Esperando próximo día...");
-        // Programar para revisar al día siguiente (24 horas)
         temporizadorActivo = setTimeout(() => {
             reiniciarProgramador(sock);
         }, 24 * 60 * 60 * 1000);
@@ -364,7 +416,7 @@ async function registrarDueno(sock, numeroDueno) {
         const timeout = setTimeout(() => {
             guardarLogLocal("⏰ Tiempo de espera agotado para confirmación del dueño");
             resolve(null);
-        }, 120000); // 2 minutos de espera
+        }, 120000);
         
         const handler = (msg) => {
             const mensaje = msg.messages[0];
@@ -373,7 +425,6 @@ async function registrarDueno(sock, numeroDueno) {
             const remitente = mensaje.key.remoteJid;
             const texto = (mensaje.message.conversation || mensaje.message.extendedTextMessage?.text || "").toLowerCase();
             
-            // Verificar si es el número que esperamos
             if (remitente === jidTentativo && texto.includes("soy el dueño")) {
                 clearTimeout(timeout);
                 sock.ev.off('messages.upsert', handler);
@@ -406,7 +457,6 @@ async function iniciarWhatsApp() {
     
     sock.ev.on('creds.update', saveCreds);
     
-    // Bandera para controlar que solo se pida el número una vez
     let pairingSolicitado = false;
     
     sock.ev.on('connection.update', async (update) => {
@@ -415,14 +465,12 @@ async function iniciarWhatsApp() {
         if (connection === 'open') {
             guardarLogLocal('✅ Conexión establecida con WhatsApp');
             
-            // Obtener el JID del bot
             const authState = await useMultiFileAuthState('auth_info_baileys');
             if (authState.state.creds.me) {
                 botJid = authState.state.creds.me.id;
                 guardarLogLocal(`🤖 Bot ID: ${botJid}`);
             }
             
-            // Verificar si ya existe dueño registrado
             if (!fs.existsSync(CONFIG.archivo_dueno)) {
                 guardarLogLocal("👤 No hay dueño registrado. Iniciando registro...");
                 
@@ -435,7 +483,6 @@ async function iniciarWhatsApp() {
                 }
             }
             
-            // Sincronización inicial con Google Sheets
             if (fs.existsSync(CONFIG.archivo_url)) {
                 const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
                 await actualizarAgenda(sock, url, 'inicial');
@@ -454,7 +501,6 @@ async function iniciarWhatsApp() {
         }
     });
     
-    // PROCESAMIENTO DE MENSAJES
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -469,11 +515,9 @@ async function iniciarWhatsApp() {
         if (mensajesEnProcesamiento.has(mensajeId)) return;
         mensajesEnProcesamiento.add(mensajeId);
         
-        // Verificar si es el dueño
         const jidDueno = fs.existsSync(CONFIG.archivo_dueno) ? fs.readFileSync(CONFIG.archivo_dueno, 'utf-8').trim() : null;
         const esDueno = remitente === jidDueno;
         
-        // Comando actualizar (solo dueño)
         if (esDueno && texto === 'actualizar') {
             const url = fs.readFileSync(CONFIG.archivo_url, 'utf-8').trim();
             await sock.sendMessage(remitente, { text: '🔄 Sincronizando agenda...' });
@@ -483,7 +527,6 @@ async function iniciarWhatsApp() {
             return;
         }
         
-        // Respuesta a menciones o respuestas al bot
         const esMencion = botEsMencionado(msg.message, botJid);
         const esRespuesta = esRespuestaABot(msg.message, botJid);
         
@@ -498,7 +541,6 @@ async function iniciarWhatsApp() {
             return;
         }
         
-        // Lógica de consultas de negocio
         const tipoNegocio = clasificarConsultaNegocio(texto);
         if (tipoNegocio) {
             const respuesta = generarRespuestaNegocio(tipoNegocio);
@@ -514,8 +556,6 @@ async function iniciarWhatsApp() {
         mensajesEnProcesamiento.delete(mensajeId);
     });
     
-    // PAIRING CODE - ESPERAR CONEXIÓN ANTES DE SOLICITAR
-    // Verificar si no hay sesión guardada
     const credsPath = 'auth_info_baileys/creds.json';
     if (!fs.existsSync(credsPath)) {
         console.log('\n====================================');
@@ -523,7 +563,6 @@ async function iniciarWhatsApp() {
         console.log('====================================');
         const numeroBot = await question('Escribe el número que será el BOT (ej: 52155...): ');
         
-        // Esperar a que el socket esté conectado antes de solicitar pairing code
         const esperarConexion = () => {
             return new Promise((resolve) => {
                 const checkConnection = (update) => {
@@ -533,8 +572,6 @@ async function iniciarWhatsApp() {
                     }
                 };
                 sock.ev.on('connection.update', checkConnection);
-                
-                // Timeout por si no se conecta
                 setTimeout(() => resolve(), 30000);
             });
         };
@@ -553,5 +590,16 @@ async function iniciarWhatsApp() {
     }
 }
 
-// INICIAR BOT
 iniciarWhatsApp().catch(err => guardarLogLocal(`❌ FATAL: ${err.message}`));
+EOF
+
+echo ""
+echo "===================================="
+echo "✅ INSTALACIÓN COMPLETA"
+echo "===================================="
+echo ""
+echo "🚀 Iniciando el bot automáticamente..."
+echo ""
+
+# 9. Iniciar el bot automáticamente
+node bot.js
