@@ -1,23 +1,10 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
 // Versión: 46.1 - FILTRO DE ESTADOS + MENCIONES + TEXTOS PROFESIONALES
-// + MEJORA 1: Keep-Alive cada 25 segundos
-// + MEJORA 2: Ignorar mensajes de grupos (sin contexto)
-// + MEJORA 3: PROCESAMIENTO INMEDIATO DE MENSAJES
-// + MEJORA 4: MENCIONES EN TODAS LAS RESPUESTAS
-// + MEJORA 5: TEXTOS PROFESIONALES PARA NEGOCIOS
-// + MEJORA 6: FILTRO DE ESTADOS (status@broadcast) - NUEVO
-// + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
-// + NUEVO: Tabla de correspondencia producto-archivo
-// + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados con setTimeout)
-// + VERSIÓN 43.0: Múltiples archivos por producto
-// + VERSIÓN 44.0: Interacciones con menciones y reacciones
-// + VERSIÓN 45.0: Optimización de inmediatez
-// + VERSIÓN 46.0: Menciones a usuarios + textos profesionales
-// + VERSIÓN 46.1: Filtro de estados para evitar procesar status@broadcast
+// CORRECCIÓN: Ruta multimedia en /storage/emulated/0/
 // ============================================
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const fs = require('fs');
 const path = require('path');
@@ -27,14 +14,8 @@ const readline = require('readline');
 const pino = require('pino');
 const { getLinkPreview } = require('link-preview-js');
 const crypto = require('crypto');
-// ============================================
-// LIBRERÍA PARA DATA STORE
-// ============================================
 const { makeInMemoryStore } = require('@rodrigogs/baileys-store');
 
-// ============================================
-// CONFIGURACIÓN
-// ============================================
 const CONFIG = {
     carpeta_sesion: './sesion_whatsapp',
     archivo_url: '../url_sheets.txt',
@@ -46,19 +27,17 @@ const CONFIG = {
     carpeta_logs: './logs',
     carpeta_cache: './cache',
     numero_telefono: '',
-    horarios_actualizacion: ['06:00'], // SOLO 6am para actualización automática
+    horarios_actualizacion: ['06:00'],
     dias_retencion_store: 30,
-    carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
+    carpeta_multimedia: '/storage/emulated/0/',
     tiempo_espera_grupos: 30000,
-    // CONFIGURACIÓN PARA MÚLTIPLES ARCHIVOS
-    delay_entre_archivos: 3, // segundos entre cada archivo del mismo grupo
+    delay_entre_archivos: 3,
     textos_por_tipo: {
-        imagen: '', // El texto principal ya se usa con la primera imagen
+        imagen: '',
         video: '🎬 Te comparto un video de *[PRODUCTO]*',
         audio: '🔊 Escucha más información sobre *[PRODUCTO]*',
         documento: '📄 Aquí tienes más información de *[PRODUCTO]*'
     },
-    // NUEVA CONFIGURACIÓN PARA INTERACCIONES (VERSIÓN 46.0 - TEXTOS PROFESIONALES)
     textos_sinonimos: {
         saludos: ["¡Hola! 👋", "¡Buen día! ☀️", "¡Hola, gracias por contactarnos! 😊", "¡Un gusto saludarte! 🤝", "¡Gracias por comunicarte! ✨"],
         agradecimientos: ["¡Gracias! 🙏", "Te lo agradecemos ✨", "¡Gracias por tu interés! 🌟", "Agradecemos tu mensaje 💫", "¡Gracias por escribirnos!"],
@@ -131,17 +110,12 @@ const CONFIG = {
         info: ["info", "información", "características", "descripción", "qué es", "detalles", "descripcion", "caracteristicas", "como es", "que tiene", "especificaciones"],
         generica: ["más", "info", "información", "quiero saber", "dime", "mas", "informacion", "saber", "conocer", "interesa", "me interesa", "quisiera saber"]
     },
-    // CONFIGURACIÓN PARA INMEDIATEZ
-    delay_respuesta_min: 1, // segundos mínimos antes de responder (simular typing)
-    delay_respuesta_max: 3  // segundos máximos antes de responder
+    delay_respuesta_min: 1,
+    delay_respuesta_max: 3
 };
 
-// ============================================
-// VARIABLES GLOBALES PARA TIMERS
-// ============================================
-let timersEnvios = []; // Array para guardar todos los setTimeout activos
+let timersEnvios = [];
 
-// Crear carpetas necesarias
 if (!fs.existsSync(CONFIG.carpeta_logs)) {
     fs.mkdirSync(CONFIG.carpeta_logs);
 }
@@ -160,45 +134,26 @@ if (!fs.existsSync(CONFIG.carpeta_multimedia)) {
     }
 }
 
-// ============================================
-// INICIALIZAR DATA STORE
-// ============================================
 console.log('📚 Inicializando Data Store...');
 const store = makeInMemoryStore({
     logger: pino({ level: 'silent' }).child({ stream: 'store' })
 });
 
-// Si ya existe un archivo del store, lo cargamos
 if (fs.existsSync(CONFIG.archivo_store)) {
     store.readFromFile(CONFIG.archivo_store);
     console.log('📚 Data Store cargado desde archivo.');
 }
 
-// Guardar el store cada 10 segundos
 setInterval(() => {
     store.writeToFile(CONFIG.archivo_store);
 }, 10_000);
 
-// ============================================
-// CACHE DE GRUPOS
-// ============================================
 const groupCache = new Map();
-
-// Variable para llevar registro de imágenes usadas en el lote actual
 let imagenesUsadasEnLote = new Set();
-
-// ============================================
-// NUEVO: CACHE DE PRODUCTOS (para tabla de correspondencia)
-// ============================================
 let productosCache = [];
 let ultimaActualizacionProductos = 0;
-
-// Variable para controlar mensajes en procesamiento (evitar doble respuesta)
 const mensajesEnProcesamiento = new Set();
 
-// ============================================
-// FUNCIÓN PARA OBTENER METADATOS DE GRUPO CON CACHÉ
-// ============================================
 async function obtenerMetadataGrupoConCache(sock, groupId) {
     try {
         if (groupCache.has(groupId)) {
@@ -207,7 +162,7 @@ async function obtenerMetadataGrupoConCache(sock, groupId) {
             return cached;
         }
         
-        guardarLogLocal(`   🌐 Consultando a WhatsApp (puede tomar unos segundos): ${groupId}`);
+        guardarLogLocal(`   🌐 Consultando a WhatsApp: ${groupId}`);
         const metadata = await sock.groupMetadata(groupId);
         
         if (metadata) {
@@ -218,17 +173,10 @@ async function obtenerMetadataGrupoConCache(sock, groupId) {
         return metadata;
     } catch (error) {
         guardarLogLocal(`   ❌ Error consultando grupo: ${error.message}`);
-        
-        if (error.message.includes('rate-overlimit')) {
-            guardarLogLocal(`   ⚠️ Rate limit detectado. Se reintentará automáticamente en la próxima sincronización.`);
-        }
         return null;
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Buscar TODOS los archivos multimedia que coincidan con un nombre
-// ============================================
 function buscarTodosLosArchivosMultimedia(nombreBase) {
     try {
         if (!nombreBase || nombreBase.trim() === '') {
@@ -236,7 +184,7 @@ function buscarTodosLosArchivosMultimedia(nombreBase) {
         }
 
         const nombreLimpio = nombreBase.trim().toLowerCase();
-        guardarLogLocal(`   🔍 Buscando TODOS los archivos que contengan: "${nombreLimpio}"`);
+        guardarLogLocal(`   🔍 Buscando TODOS los archivos que contengan: "${nombreLimpio}" en ${CONFIG.carpeta_multimedia}`);
         
         const archivosEncontrados = [];
 
@@ -252,7 +200,6 @@ function buscarTodosLosArchivosMultimedia(nombreBase) {
                         buscarRecursivo(rutaCompleta);
                     } else {
                         const nombreSinExtension = path.parse(archivo).name.toLowerCase();
-                        // Buscar si el nombre del archivo CONTIENE el nombre base
                         if (nombreSinExtension.includes(nombreLimpio)) {
                             archivosEncontrados.push({
                                 ruta: rutaCompleta,
@@ -268,7 +215,6 @@ function buscarTodosLosArchivosMultimedia(nombreBase) {
 
         buscarRecursivo(CONFIG.carpeta_multimedia);
         
-        // Ordenar por tipo: imágenes primero, luego videos, luego audios, luego documentos
         const ordenPrioridad = {
             'imagen': 1,
             'video': 2,
@@ -295,9 +241,6 @@ function buscarTodosLosArchivosMultimedia(nombreBase) {
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Obtener tipo de archivo por extensión
-// ============================================
 function obtenerTipoArchivo(extension) {
     if (['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(extension)) {
         return 'imagen';
@@ -313,40 +256,29 @@ function obtenerTipoArchivo(extension) {
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Obtener texto personalizado por tipo de archivo
-// ============================================
 function obtenerTextoPorTipo(tipo, nombreProducto) {
     let texto = CONFIG.textos_por_tipo[tipo] || '';
     return texto.replace('[PRODUCTO]', nombreProducto);
 }
 
-// ============================================
-// FUNCIÓN MODIFICADA: ENVIAR MÚLTIPLES ARCHIVOS MULTIMEDIA
-// ============================================
 async function enviarMultiplesArchivos(sock, id_grupo, archivos, textoPrincipal, nombreProducto) {
     try {
-        let tiempoTotalEnvio = 0;
         let primerArchivo = true;
         
         for (const archivo of archivos) {
             const tipo = obtenerTipoArchivo(archivo.extension);
             const buffer = fs.readFileSync(archivo.ruta);
             
-            // Determinar qué texto usar
             let textoEnvio = '';
             if (primerArchivo && tipo === 'imagen') {
-                // La primera imagen lleva el texto principal del mensaje
                 textoEnvio = textoPrincipal;
                 guardarLogLocal(`   📝 Enviando texto principal con primera imagen`);
             } else {
-                // Los demás archivos llevan texto personalizado por tipo
                 textoEnvio = obtenerTextoPorTipo(tipo, nombreProducto);
-                guardarLogLocal(`   📝 Usando texto para ${tipo}: "${textoEnvio}"`);
+                if (textoEnvio) {
+                    guardarLogLocal(`   📝 Usando texto para ${tipo}: "${textoEnvio}"`);
+                }
             }
-            
-            // Enviar según el tipo
-            const inicioEnvio = Date.now();
             
             if (tipo === 'imagen') {
                 guardarLogLocal(`   🖼️ Enviando imagen: ${archivo.nombre}`);
@@ -372,7 +304,7 @@ async function enviarMultiplesArchivos(sock, id_grupo, archivos, textoPrincipal,
                 await sock.sendMessage(id_grupo, {
                     audio: buffer,
                     mimetype: mimetype,
-                    caption: textoEnvio || '' // Algunos audios permiten caption
+                    caption: textoEnvio || ''
                 });
             }
             else {
@@ -385,32 +317,22 @@ async function enviarMultiplesArchivos(sock, id_grupo, archivos, textoPrincipal,
                 });
             }
             
-            const duracionEnvio = (Date.now() - inicioEnvio) / 1000;
-            tiempoTotalEnvio += duracionEnvio;
-            
-            guardarLogLocal(`      ✅ Enviado (${duracionEnvio.toFixed(1)}s)`);
-            
-            // Esperar entre archivos (excepto después del último)
             if (archivos.indexOf(archivo) < archivos.length - 1) {
                 guardarLogLocal(`   ⏱️ Esperando ${CONFIG.delay_entre_archivos}s antes del siguiente archivo...`);
                 await new Promise(resolve => setTimeout(resolve, CONFIG.delay_entre_archivos * 1000));
-                tiempoTotalEnvio += CONFIG.delay_entre_archivos;
             }
             
             primerArchivo = false;
         }
         
-        return tiempoTotalEnvio;
+        return true;
         
     } catch (error) {
         guardarLogLocal(`   ❌ Error enviando múltiples archivos: ${error.message}`);
-        return 0;
+        return false;
     }
 }
 
-// ============================================
-// FUNCIÓN PARA LIMPIAR STORE ANTIGUO
-// ============================================
 function limpiarStoreAntiguo() {
     try {
         guardarLogLocal('🧹 Iniciando limpieza automática del Data Store...');
@@ -423,8 +345,6 @@ function limpiarStoreAntiguo() {
         const fechaLimite = new Date();
         fechaLimite.setDate(fechaLimite.getDate() - CONFIG.dias_retencion_store);
         const timestampLimite = fechaLimite.getTime();
-        
-        guardarLogLocal(`   Conservando mensajes posteriores a: ${fechaLimite.toLocaleDateString()}`);
         
         const chats = store.chats.all() || [];
         let mensajesEliminados = 0;
@@ -463,9 +383,6 @@ function limpiarStoreAntiguo() {
     }
 }
 
-// ============================================
-// LEER URL DE GOOGLE SHEETS
-// ============================================
 function leerURL() {
     try {
         let urlPath = CONFIG.archivo_url;
@@ -481,9 +398,6 @@ function leerURL() {
     }
 }
 
-// ============================================
-// PEDIR NÚMERO DE TELÉFONO
-// ============================================
 function pedirNumeroSilencioso() {
     return new Promise((resolve) => {
         const rl = readline.createInterface({
@@ -497,9 +411,6 @@ function pedirNumeroSilencioso() {
     });
 }
 
-// ============================================
-// CONSULTAR TODOS LOS GRUPOS A GOOGLE SHEETS
-// ============================================
 async function consultarTodosLosGrupos(url) {
     try {
         console.log('🔄 Descargando TODOS los grupos desde Google Sheets...');
@@ -513,15 +424,13 @@ async function consultarTodosLosGrupos(url) {
                 if (partes.length === 2 && !isNaN(partes[0]) && !isNaN(partes[1])) {
                     CONFIG.tiempo_entre_mensajes_min = partes[0];
                     CONFIG.tiempo_entre_mensajes_max = partes[1];
-                    console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (formato min-max)`);
-                } else {
-                    console.log(`⚠️  Formato de delay inválido: ${delayStr}, usando valores por defecto`);
+                    console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos`);
                 }
             } else if (delayStr && !isNaN(parseInt(delayStr))) {
                 const valor = parseInt(delayStr);
                 CONFIG.tiempo_entre_mensajes_min = 1;
                 CONFIG.tiempo_entre_mensajes_max = valor;
-                console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos (convertido desde valor único)`);
+                console.log(`⏱️  Delay configurado: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} segundos`);
             }
         }
         
@@ -532,9 +441,6 @@ async function consultarTodosLosGrupos(url) {
     }
 }
 
-// ============================================
-// GUARDAR AGENDA LOCAL
-// ============================================
 function guardarAgendaLocal(data) {
     try {
         const grupos = data.grupos || [];
@@ -563,9 +469,6 @@ function guardarAgendaLocal(data) {
         fs.writeFileSync(CONFIG.archivo_agenda, JSON.stringify(agenda, null, 2));
         
         console.log(`✅ Agenda guardada localmente (${grupos.length} grupos en ${Object.keys(agenda.pestanas).length} pestañas)`);
-        Object.keys(agenda.pestanas).forEach(pestana => {
-            console.log(`   📌 ${pestana}: ${agenda.pestanas[pestana].grupos.length} grupos - Horario: ${agenda.pestanas[pestana].horario || 'N/A'}`);
-        });
         
         return true;
     } catch (error) {
@@ -574,14 +477,8 @@ function guardarAgendaLocal(data) {
     }
 }
 
-// ============================================
-// VARIABLE PARA ALMACENAR LA AGENDA EN MEMORIA
-// ============================================
 let agendaEnMemoria = null;
 
-// ============================================
-// CARGAR AGENDA LOCAL (SOLO UNA VEZ Y CUANDO SEA NECESARIO)
-// ============================================
 function cargarAgendaLocal() {
     try {
         if (agendaEnMemoria) {
@@ -610,17 +507,11 @@ function cargarAgendaLocal() {
     }
 }
 
-// ============================================
-// FORZAR RECARGA DE AGENDA (para el comando actualizar)
-// ============================================
 function recargarAgenda() {
     agendaEnMemoria = null;
     return cargarAgendaLocal();
 }
 
-// ============================================
-// ACTUALIZAR AGENDA
-// ============================================
 async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     try {
         guardarLogLocal(`🔄 Actualizando agenda (${origen})...`);
@@ -640,17 +531,14 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
         if (guardarAgendaLocal(data)) {
             recargarAgenda();
             const total = data.grupos?.length || 0;
-            const pestanas = data.pestanas?.length || 0;
-            guardarLogLocal(`✅ Agenda actualizada: ${total} grupos en ${pestanas} pestañas`);
+            guardarLogLocal(`✅ Agenda actualizada: ${total} grupos`);
             
-            // Actualizar caché de productos con los productos recibidos
             if (data.productos && Array.isArray(data.productos)) {
                 productosCache = data.productos;
                 ultimaActualizacionProductos = Date.now();
-                guardarLogLocal(`📦 Caché de productos actualizado desde Sheets: ${productosCache.length} productos`);
+                guardarLogLocal(`📦 Caché de productos actualizado: ${productosCache.length} productos`);
             }
             
-            // Si hay un socket activo, reprogramar todos los envíos
             if (sock) {
                 reprogramarTodosLosEnvios(sock);
             }
@@ -664,9 +552,6 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
     }
 }
 
-// ============================================
-// GUARDAR LOG LOCAL (MEJORADO)
-// ============================================
 function guardarLogLocal(texto) {
     const fecha = new Date().toISOString().split('T')[0];
     const logFile = path.join(CONFIG.carpeta_logs, `${fecha}.log`);
@@ -688,38 +573,20 @@ function guardarLogLocal(texto) {
     }
 }
 
-// ============================================
-// FUNCIÓN PARA SIMULAR QUE ESTÁ ESCRIBIENDO
-// ============================================
 async function simularTyping(sock, id_destino, duracion) {
     try {
         await sock.sendPresenceUpdate('composing', id_destino);
-        guardarLogLocal(`   ✍️ Typing por ${duracion} segundos...`);
-        
         await new Promise(resolve => setTimeout(resolve, duracion * 1000));
-        
         await sock.sendPresenceUpdate('paused', id_destino);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error en typing: ${error.message}`);
-    }
+    } catch (error) {}
 }
 
-// ============================================
-// FUNCIÓN PARA GENERAR HASH DE URL
-// ============================================
 function generarHashURL(url) {
     return crypto.createHash('md5').update(url).digest('hex');
 }
 
-// ============================================
-// FUNCIÓN PARA OBTENER SOLO LA URL DE LA IMAGEN DEL PREVIEW
-// ============================================
 async function obtenerUrlImagenPreview(url) {
     try {
-        guardarLogLocal(`   🔍 Buscando imagen para: ${url}`);
-        
         const previewData = await getLinkPreview(url, {
             timeout: 10000,
             headers: {
@@ -729,67 +596,44 @@ async function obtenerUrlImagenPreview(url) {
         });
         
         if (previewData.images && previewData.images.length > 0) {
-            const imagenUrl = previewData.images[0];
-            guardarLogLocal(`   🖼️ URL de imagen encontrada: ${imagenUrl.substring(0, 50)}...`);
-            return imagenUrl;
+            return previewData.images[0];
         }
-        
-        guardarLogLocal('   ⚠️ No se encontraron imágenes');
         return null;
-        
     } catch (error) {
-        guardarLogLocal(`   ⚠️ Error obteniendo URL de imagen: ${error.message}`);
         return null;
     }
 }
 
-// ============================================
-// FUNCIÓN PARA OBTENER IMAGEN CON CACHÉ LOCAL
-// ============================================
 async function obtenerImagenConCache(url) {
     try {
         const hash = generarHashURL(url);
         const rutaImagen = path.join(CONFIG.carpeta_cache, `${hash}.jpg`);
         
         if (fs.existsSync(rutaImagen)) {
-            guardarLogLocal(`   🖼️ Imagen encontrada en caché local`);
             return fs.readFileSync(rutaImagen);
         }
-        
-        guardarLogLocal(`   ⬇️ Descargando imagen a caché local...`);
         
         const response = await axios({
             url,
             method: 'GET',
             responseType: 'arraybuffer',
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            timeout: 10000
         });
         
         const buffer = Buffer.from(response.data);
         fs.writeFileSync(rutaImagen, buffer);
         imagenesUsadasEnLote.add(rutaImagen);
         
-        guardarLogLocal(`   ✅ Imagen guardada en caché: ${hash}.jpg`);
         return buffer;
-        
     } catch (error) {
-        guardarLogLocal(`   ⚠️ Error con imagen: ${error.message}`);
         return null;
     }
 }
 
-// ============================================
-// FUNCIÓN PARA LIMPIAR CACHÉ DE IMÁGENES
-// ============================================
 function limpiarCacheImagenes() {
     try {
         const cantidad = imagenesUsadasEnLote.size;
         if (cantidad === 0) return;
-        
-        guardarLogLocal(`🧹 Limpiando caché de imágenes (${cantidad} archivos)...`);
         
         for (const ruta of imagenesUsadasEnLote) {
             try {
@@ -800,60 +644,24 @@ function limpiarCacheImagenes() {
         }
         
         imagenesUsadasEnLote.clear();
-        guardarLogLocal('✅ Caché limpiado correctamente');
-        
-    } catch (error) {
-        guardarLogLocal(`⚠️ Error limpiando caché: ${error.message}`);
-    }
+    } catch (error) {}
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Obtener emoji inteligente (sin cambios)
-// ============================================
 function obtenerEmojiInteligente(producto) {
     if (!producto) return '🎁';
     
     const texto = producto.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     
-    if (texto.includes('vaso') || texto.includes('taza') || texto.includes('botella') || 
-        texto.includes('agua') || texto.includes('bebida') || texto.includes('cafe') || 
-        texto.includes('café') || texto.includes('termo')) {
-        return '🥤';
-    }
-    
-    if (texto.includes('comida') || texto.includes('hamburguesa') || texto.includes('pizza') || 
-        texto.includes('sandwich') || texto.includes('pan') || texto.includes('comer')) {
-        return '🍔';
-    }
-    
-    if (texto.includes('gorra') || texto.includes('sombrero') || texto.includes('camisa') || 
-        texto.includes('camiseta') || texto.includes('pantalon') || texto.includes('vestido') ||
-        texto.includes('ropa')) {
-        return '👕';
-    }
-    
-    if (texto.includes('telefono') || texto.includes('celular') || texto.includes('computadora') || 
-        texto.includes('tablet') || texto.includes('cargador') || texto.includes('audifono') ||
-        texto.includes('electronica')) {
-        return '📱';
-    }
-    
-    if (texto.includes('pelota') || texto.includes('deporte') || texto.includes('bicicleta') || 
-        texto.includes('gimnasio') || texto.includes('ejercicio')) {
-        return '⚽';
-    }
-    
-    if (texto.includes('mueble') || texto.includes('silla') || texto.includes('mesa') || 
-        texto.includes('cama') || texto.includes('decoracion')) {
-        return '🏠';
-    }
+    if (texto.includes('vaso') || texto.includes('taza') || texto.includes('botella') || texto.includes('termo')) return '🥤';
+    if (texto.includes('comida') || texto.includes('hamburguesa') || texto.includes('pizza')) return '🍔';
+    if (texto.includes('gorra') || texto.includes('camisa') || texto.includes('ropa')) return '👕';
+    if (texto.includes('telefono') || texto.includes('celular') || texto.includes('computadora')) return '📱';
+    if (texto.includes('pelota') || texto.includes('deporte') || texto.includes('bicicleta')) return '⚽';
+    if (texto.includes('mueble') || texto.includes('silla') || texto.includes('mesa')) return '🏠';
     
     return '🎁';
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Obtener productos desde Google Sheets (para tabla de correspondencia)
-// ============================================
 async function obtenerProductosDesdeSheets(url) {
     try {
         const respuesta = await axios.get(url);
@@ -863,16 +671,13 @@ async function obtenerProductosDesdeSheets(url) {
             return [];
         }
         
-        // Extraer productos únicos de los mensajes
         const productosMap = new Map();
         
         data.grupos.forEach(grupo => {
             if (grupo.mensaje && grupo.mensaje.includes('*')) {
-                // Extraer nombre del producto (entre asteriscos)
                 const match = grupo.mensaje.match(/\*([^*]+)\*/);
                 if (match && match[1]) {
                     const nombreProducto = match[1].trim();
-                    // Buscar archivo en el mensaje (entre paréntesis)
                     const archivoMatch = grupo.mensaje.match(/\(([^)]+)\)/);
                     if (archivoMatch && archivoMatch[1]) {
                         productosMap.set(nombreProducto, archivoMatch[1].trim());
@@ -887,18 +692,13 @@ async function obtenerProductosDesdeSheets(url) {
         }));
         
     } catch (error) {
-        guardarLogLocal(`❌ Error obteniendo productos: ${error.message}`);
         return [];
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Actualizar caché de productos
-// ============================================
 async function actualizarCacheProductos(url) {
     try {
         const ahora = Date.now();
-        // Actualizar cada hora
         if (ahora - ultimaActualizacionProductos < 3600000 && productosCache.length > 0) {
             return productosCache;
         }
@@ -909,28 +709,20 @@ async function actualizarCacheProductos(url) {
         return productosCache;
         
     } catch (error) {
-        guardarLogLocal(`❌ Error actualizando caché de productos: ${error.message}`);
         return productosCache;
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Buscar archivo por nombre de producto (AHORA USA MÚLTIPLES ARCHIVOS)
-// ============================================
 function buscarArchivosPorProducto(nombreProducto) {
     if (!nombreProducto || productosCache.length === 0) return [];
     
-    // Buscar el producto exacto en el caché
     const producto = productosCache.find(p => 
         p.producto.toLowerCase() === nombreProducto.toLowerCase()
     );
     
     if (producto) {
-        // El archivo viene con paréntesis, los eliminamos y aplicamos trim
         const archivoLimpio = producto.archivo.replace(/^\(|\)$/g, '').trim();
         guardarLogLocal(`   📦 Producto encontrado: "${producto.producto}" → archivo base: "${archivoLimpio}"`);
-        
-        // Buscar TODOS los archivos que contengan este nombre base
         return buscarTodosLosArchivosMultimedia(archivoLimpio);
     }
     
@@ -938,31 +730,22 @@ function buscarArchivosPorProducto(nombreProducto) {
     return [];
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Extraer nombre del producto del texto (CORREGIDA)
-// ============================================
 function extraerNombreProducto(texto) {
     if (!texto) return null;
-    // Buscar el ÚLTIMO par de asteriscos en el mensaje (que es donde está el producto)
     const matches = [...texto.matchAll(/\*([^*]+)\*/g)];
     if (matches.length > 0) {
-        // Tomar el último match (el producto)
         const ultimo = matches[matches.length - 1];
         return ultimo[1].trim();
     }
     return null;
 }
 
-// ============================================
-// FUNCIÓN PARA PROCESAR SPINTEX Y SPINEMOJI (CORREGIDA PARA BAILEYS)
-// ============================================
 function procesarSpinEnMensaje(texto) {
     if (!texto || typeof texto !== 'string') return texto;
     
     let textoProcesado = texto;
     let modificado = false;
     
-    // 1. Procesar SpinTex: {spin|opcion1|opcion2|opcion3}
     const spinTexRegex = /\{spin\|(.*?)\}/gi;
     let match;
     
@@ -974,11 +757,9 @@ function procesarSpinEnMensaje(texto) {
             const opcionAleatoria = opciones[Math.floor(Math.random() * opciones.length)];
             textoProcesado = textoProcesado.replace(match[0], opcionAleatoria);
             modificado = true;
-            guardarLogLocal(`   🎲 SpinTex: elegida "${opcionAleatoria}" de [${opciones.join(', ')}]`);
         }
     }
     
-    // 2. Procesar SpinEmoji: {emoji|😀|😎|🥳} o simplemente {👋|😊|✨|🙌} SIN palabra clave
     const spinEmojiRegex = /\{([^}]+)\}/g;
     
     while ((match = spinEmojiRegex.exec(texto)) !== null) {
@@ -991,20 +772,12 @@ function procesarSpinEnMensaje(texto) {
             const opcionAleatoria = opciones[Math.floor(Math.random() * opciones.length)];
             textoProcesado = textoProcesado.replace(match[0], opcionAleatoria);
             modificado = true;
-            guardarLogLocal(`   🎲 SpinEmoji: elegido "${opcionAleatoria}" de [${opciones.join(', ')}]`);
         }
-    }
-    
-    if (modificado) {
-        guardarLogLocal(`   📝 Mensaje después de spin: "${textoProcesado}"`);
     }
     
     return textoProcesado;
 }
 
-// ============================================
-// FUNCIÓN MODIFICADA: ENVIAR MENSAJE (AHORA CON MÚLTIPLES ARCHIVOS)
-// ============================================
 async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     try {
         if (!id_grupo || !id_grupo.includes('@g.us')) {
@@ -1012,41 +785,27 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
         }
         
         const inicioEnvio = Date.now();
-        
-        // Aplicar procesamiento de spin al mensaje
         const mensajeProcesado = procesarSpinEnMensaje(mensajeOriginal);
-        
-        // Forzar que el mensaje sea tratado como string plano
         const mensajeFinal = String(mensajeProcesado);
         
-        // Extraer nombre del producto
         const nombreProducto = extraerNombreProducto(mensajeFinal);
         
         if (nombreProducto) {
             guardarLogLocal(`   🔍 Producto detectado en mensaje: "${nombreProducto}"`);
             
-            // Buscar TODOS los archivos para este producto
             const archivos = buscarArchivosPorProducto(nombreProducto);
             
             if (archivos.length > 0) {
                 guardarLogLocal(`   📦 Encontrados ${archivos.length} archivos para enviar`);
-                
-                // Limpiar el texto de posibles paréntesis residuales
                 const textoLimpio = mensajeFinal.replace(/\([^)]+\)/g, '').trim();
-                
-                // Enviar múltiples archivos
-                const tiempoEnvio = await enviarMultiplesArchivos(sock, id_grupo, archivos, textoLimpio, nombreProducto);
-                
+                await enviarMultiplesArchivos(sock, id_grupo, archivos, textoLimpio, nombreProducto);
                 return {
                     resultado: `MÚLTIPLES ARCHIVOS (${archivos.length})`,
                     tiempo: (Date.now() - inicioEnvio) / 1000
                 };
-            } else {
-                guardarLogLocal(`   ⚠️ No se encontraron archivos para "${nombreProducto}"`);
             }
         }
         
-        // Si no hay archivos, enviar solo el texto
         await sock.sendMessage(id_grupo, { text: mensajeFinal });
         return {
             resultado: 'TEXTO ENVIADO',
@@ -1062,19 +821,12 @@ async function enviarMensaje(sock, id_grupo, mensajeOriginal) {
     }
 }
 
-// ============================================
-// OBTENER DELAY ALEATORIO
-// ============================================
 function obtenerDelayAleatorio() {
     const min = CONFIG.tiempo_entre_mensajes_min || 1;
     const max = CONFIG.tiempo_entre_mensajes_max || 5;
-    const delay = Math.floor(Math.random() * (max - min + 1) + min);
-    return delay;
+    return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-// ============================================
-// FUNCIÓN MODIFICADA: VERIFICAR MENSAJES PENDIENTES CON DELAY INTELIGENTE
-// ============================================
 async function verificarMensajesLocales(sock) {
     try {
         const agenda = agendaEnMemoria || cargarAgendaLocal();
@@ -1108,29 +860,24 @@ async function verificarMensajesLocales(sock) {
         guardarLogLocal(`⏰ HORA DE ENVÍO DETECTADA: ${horaActual} - Procesando ${pestanasAHora.length} pestañas`);
         imagenesUsadasEnLote.clear();
 
-        const tiempoInicioLote = Date.now();
         let ultimoTiempoEnvio = 0;
 
         for (const pestana of pestanasAHora) {
-            guardarLogLocal(`📊 Pestaña "${pestana.nombre}" - Enviando ${pestana.grupos.length} mensajes (horario: ${pestana.horario})`);
+            guardarLogLocal(`📊 Pestaña "${pestana.nombre}" - Enviando ${pestana.grupos.length} mensajes`);
 
             for (const grupo of pestana.grupos) {
                 const diasPermitidos = grupo.dias ? grupo.dias.split(',').map(d => d.trim()) : [];
                 if (diasPermitidos.length > 0 && !diasPermitidos.includes(diaSemana)) {
-                    guardarLogLocal(`   ⏭️  ${grupo.nombre || grupo.id} - no corresponde hoy (días: ${grupo.dias})`);
+                    guardarLogLocal(`   ⏭️ ${grupo.nombre || grupo.id} - no corresponde hoy`);
                     continue;
                 }
 
-                guardarLogLocal(`   📤 Enviando a: ${grupo.nombre || grupo.id}`);
-                
-                // Calcular delay inteligente basado en el tiempo real del envío anterior
                 const delayMinimoSegundos = obtenerDelayAleatorio();
                 const tiempoDesdeUltimoEnvio = (Date.now() - ultimoTiempoEnvio) / 1000;
                 
-                let tiempoEspera = 0;
                 if (ultimoTiempoEnvio > 0 && tiempoDesdeUltimoEnvio < delayMinimoSegundos) {
-                    tiempoEspera = delayMinimoSegundos - tiempoDesdeUltimoEnvio;
-                    guardarLogLocal(`   ⏱️ Delay inteligente: esperando ${tiempoEspera.toFixed(1)}s adicionales para cumplir mínimo ${delayMinimoSegundos}s`);
+                    const tiempoEspera = delayMinimoSegundos - tiempoDesdeUltimoEnvio;
+                    guardarLogLocal(`   ⏱️ Delay inteligente: esperando ${tiempoEspera.toFixed(1)}s`);
                     await new Promise(resolve => setTimeout(resolve, tiempoEspera * 1000));
                 }
                 
@@ -1141,13 +888,8 @@ async function verificarMensajesLocales(sock) {
                 ultimoTiempoEnvio = Date.now();
                 guardarLogLocal(`      Resultado: ${resultado.resultado} (${resultado.tiempo.toFixed(1)}s)`);
             }
-            
-            guardarLogLocal(`✅ Pestaña "${pestana.nombre}" completada`);
         }
 
-        const tiempoTotalLote = (Date.now() - tiempoInicioLote) / 1000;
-        guardarLogLocal(`✅ Lote completado en ${tiempoTotalLote.toFixed(1)} segundos`);
-        
         limpiarCacheImagenes();
 
     } catch (error) {
@@ -1156,9 +898,6 @@ async function verificarMensajesLocales(sock) {
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Calcular tiempo hasta próximo horario
-// ============================================
 function calcularTiempoHastaHorario(horario) {
     const ahora = new Date();
     const [horas, minutos] = horario.split(':').map(Number);
@@ -1166,7 +905,6 @@ function calcularTiempoHastaHorario(horario) {
     const proximo = new Date(ahora);
     proximo.setHours(horas, minutos, 0, 0);
     
-    // Si ya pasó, programar para mañana
     if (proximo <= ahora) {
         proximo.setDate(proximo.getDate() + 1);
     }
@@ -1174,31 +912,22 @@ function calcularTiempoHastaHorario(horario) {
     return proximo - ahora;
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Programar un horario específico
-// ============================================
 function programarHorario(horario, sock) {
     const tiempoEspera = calcularTiempoHastaHorario(horario);
     const fechaEjecucion = new Date(Date.now() + tiempoEspera);
     
-    guardarLogLocal(`   📅 Programado: ${horario} (en ${Math.round(tiempoEspera/60000)} minutos - ${fechaEjecucion.toLocaleString()})`);
+    guardarLogLocal(`   📅 Programado: ${horario} (en ${Math.round(tiempoEspera/60000)} minutos)`);
     
     const timer = setTimeout(async () => {
         guardarLogLocal(`⏰ EJECUTANDO HORARIO PROGRAMADO: ${horario}`);
         await verificarMensajesLocales(sock);
-        
-        // Reprogramar para el mismo horario mañana
         programarHorario(horario, sock);
     }, tiempoEspera);
     
-    // Guardar el timer para poder cancelarlo después
     timersEnvios.push(timer);
     return timer;
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Cancelar todos los timers activos
-// ============================================
 function cancelarTodosLosTimers() {
     if (timersEnvios.length > 0) {
         guardarLogLocal(`🔄 Cancelando ${timersEnvios.length} timers activos...`);
@@ -1207,18 +936,12 @@ function cancelarTodosLosTimers() {
     }
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Reprogramar todos los envíos según la agenda actual
-// ============================================
 function reprogramarTodosLosEnvios(sock) {
-    // Cancelar todos los timers existentes
     cancelarTodosLosTimers();
     
-    // Cargar la agenda actualizada
     const agenda = cargarAgendaLocal();
-    
-    // Obtener horarios únicos
     const horariosUnicos = new Set();
+    
     if (agenda.pestanas) {
         Object.values(agenda.pestanas).forEach(pestana => {
             if (pestana.horario) {
@@ -1229,20 +952,14 @@ function reprogramarTodosLosEnvios(sock) {
     
     guardarLogLocal(`🔄 Reprogramando ${horariosUnicos.size} horarios de envío...`);
     
-    // Programar cada horario único
     horariosUnicos.forEach(horario => {
         programarHorario(horario, sock);
     });
 }
 
-// ============================================
-// FUNCIÓN PARA OBTENER GRUPOS CON ESPERA (eventos)
-// ============================================
 async function obtenerGruposConEspera(sock) {
     return new Promise((resolve) => {
         try {
-            guardarLogLocal('⏳ Iniciando espera de 30 segundos para capturar TODOS los grupos...');
-            
             const gruposIds = new Set();
             let timeoutCompletado = false;
             
@@ -1251,10 +968,7 @@ async function obtenerGruposConEspera(sock) {
                 
                 updates.forEach(update => {
                     if (update.id && update.id.endsWith('@g.us')) {
-                        if (!gruposIds.has(update.id)) {
-                            gruposIds.add(update.id);
-                            guardarLogLocal(`   ➕ Grupo detectado por evento: ${update.id}`);
-                        }
+                        gruposIds.add(update.id);
                     }
                 });
             };
@@ -1264,46 +978,36 @@ async function obtenerGruposConEspera(sock) {
             setTimeout(() => {
                 timeoutCompletado = true;
                 sock.ev.off('groups.update', manejarGroupsUpdate);
-                
-                guardarLogLocal(`✅ Espera completada. Se detectaron ${gruposIds.size} grupos por eventos.`);
                 resolve(Array.from(gruposIds));
             }, CONFIG.tiempo_espera_grupos);
             
         } catch (error) {
-            guardarLogLocal(`❌ Error en espera de grupos: ${error.message}`);
             resolve([]);
         }
     });
 }
 
-// ============================================
-// NUEVA FUNCIÓN: Consulta masiva de grupos (UNA SOLA VEZ)
-// ============================================
 async function obtenerTodosLosGruposWhatsApp(sock) {
     try {
-        guardarLogLocal('🔍 Ejecutando consulta MASIVA de grupos (UNA SOLA VEZ)...');
+        guardarLogLocal('🔍 Ejecutando consulta MASIVA de grupos...');
         
-        // Verificar si la función existe
         if (typeof sock.groupFetchAllParticipatingGroups !== 'function') {
             guardarLogLocal('⚠️ Función no disponible, usando método alternativo');
             return null;
         }
         
-        // UNA SOLA CONSULTA para obtener TODOS los grupos
         const gruposDict = await sock.groupFetchAllParticipatingGroups();
         
         if (!gruposDict || typeof gruposDict !== 'object') {
-            guardarLogLocal('⚠️ No se obtuvieron grupos');
             return null;
         }
         
-        // Convertir a array
         const gruposArray = Object.entries(gruposDict).map(([id, info]) => ({
             id: id,
             info: info
         }));
         
-        guardarLogLocal(`✅ Consulta masiva exitosa: ${gruposArray.length} grupos obtenidos en UNA SOLA LLAMADA`);
+        guardarLogLocal(`✅ Consulta masiva exitosa: ${gruposArray.length} grupos`);
         return gruposArray;
         
     } catch (error) {
@@ -1312,44 +1016,24 @@ async function obtenerTodosLosGruposWhatsApp(sock) {
     }
 }
 
-// ============================================
-// FUNCIÓN PRINCIPAL MODIFICADA: Obtener grupos (USA CONSULTA MASIVA)
-// ============================================
 async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     try {
         guardarLogLocal('🔍 Obteniendo grupos...');
         
-        // PASO 1: Intentar consulta masiva (UNA SOLA VEZ)
         const gruposMasivos = await obtenerTodosLosGruposWhatsApp(sock);
         
-        // PASO 2: Si la consulta masiva funciona, procesar todo de una vez
         if (gruposMasivos && gruposMasivos.length > 0) {
-            guardarLogLocal(`   Procesando ${gruposMasivos.length} grupos desde consulta masiva...`);
-            
             const listaGrupos = [];
             
             for (const grupo of gruposMasivos) {
                 let nombreGrupo = 'Sin nombre';
                 const info = grupo.info;
                 
-                // Buscar nombre en diferentes campos
-                if (info.name && info.name !== 'Sin nombre' && info.name.trim() !== '') {
-                    nombreGrupo = info.name;
-                }
-                else if (info.subject && info.subject !== 'Sin nombre' && info.subject.trim() !== '') {
-                    nombreGrupo = info.subject;
-                }
-                else if (info.metadata && info.metadata.subject) {
-                    nombreGrupo = info.metadata.subject;
-                }
-                else if (info.metadata && info.metadata.name) {
-                    nombreGrupo = info.metadata.name;
-                }
-                else if (info.title) {
-                    nombreGrupo = info.title;
-                }
+                if (info.name && info.name !== 'Sin nombre') nombreGrupo = info.name;
+                else if (info.subject && info.subject !== 'Sin nombre') nombreGrupo = info.subject;
+                else if (info.metadata && info.metadata.subject) nombreGrupo = info.metadata.subject;
+                else if (info.title) nombreGrupo = info.title;
                 
-                // Guardar en caché para futuras consultas
                 if (!groupCache.has(grupo.id)) {
                     groupCache.set(grupo.id, info);
                 }
@@ -1364,8 +1048,7 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
             return listaGrupos;
         }
         
-        // PASO 3: Si la consulta masiva falla, usar el método antiguo (grupo por grupo)
-        guardarLogLocal('⚠️ Usando método alternativo (grupo por grupo)...');
+        guardarLogLocal('⚠️ Usando método alternativo...');
         
         let gruposIdsAdicionales = [];
         if (usarEspera) {
@@ -1373,60 +1056,31 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
         }
         
         if (!store || !store.chats) {
-            guardarLogLocal('❌ Data Store no disponible');
             return [];
         }
         
         const todosLosChats = store.chats.all() || [];
-        guardarLogLocal(`   Total de chats en store: ${todosLosChats.length}`);
-        
         const grupos = todosLosChats.filter(chat => chat.id && chat.id.endsWith('@g.us'));
-        
-        guardarLogLocal(`   Chats del store filtrados como grupos: ${grupos.length}`);
-        
-        if (gruposIdsAdicionales.length > 0) {
-            guardarLogLocal(`   Grupos adicionales por eventos: ${gruposIdsAdicionales.length}`);
-        }
         
         const listaGrupos = [];
         const gruposProcesados = new Set();
         
         for (const chat of grupos) {
             let nombreGrupo = 'Sin nombre';
-            let metadata = null;
             
-            if (chat.name && chat.name !== 'Sin nombre' && chat.name.trim() !== '') {
-                nombreGrupo = chat.name;
-            }
-            else if (chat.subject && chat.subject !== 'Sin nombre' && chat.subject.trim() !== '') {
-                nombreGrupo = chat.subject;
-            }
-            else if (chat.metadata && chat.metadata.subject) {
-                nombreGrupo = chat.metadata.subject;
-            }
-            else if (chat.metadata && chat.metadata.name) {
-                nombreGrupo = chat.metadata.name;
-            }
-            else if (chat.title) {
-                nombreGrupo = chat.title;
-            }
+            if (chat.name && chat.name !== 'Sin nombre') nombreGrupo = chat.name;
+            else if (chat.subject && chat.subject !== 'Sin nombre') nombreGrupo = chat.subject;
+            else if (chat.metadata && chat.metadata.subject) nombreGrupo = chat.metadata.subject;
+            else if (chat.title) nombreGrupo = chat.title;
             
-            if (nombreGrupo === 'Sin nombre') {
-                if (groupCache.has(chat.id)) {
-                    metadata = groupCache.get(chat.id);
-                    if (metadata && metadata.subject) {
-                        nombreGrupo = metadata.subject;
-                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ: ${nombreGrupo}`);
-                    }
-                }
+            if (nombreGrupo === 'Sin nombre' && groupCache.has(chat.id)) {
+                const metadata = groupCache.get(chat.id);
+                if (metadata && metadata.subject) nombreGrupo = metadata.subject;
             }
             
             if (nombreGrupo === 'Sin nombre' && sock) {
-                guardarLogLocal(`   ⚠️ Grupo sin nombre, consultando a WhatsApp con CACHÉ: ${chat.id}`);
-                metadata = await obtenerMetadataGrupoConCache(sock, chat.id);
-                if (metadata && metadata.subject) {
-                    nombreGrupo = metadata.subject;
-                }
+                const metadata = await obtenerMetadataGrupoConCache(sock, chat.id);
+                if (metadata && metadata.subject) nombreGrupo = metadata.subject;
             }
             
             listaGrupos.push({
@@ -1438,23 +1092,16 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
         
         for (const id of gruposIdsAdicionales) {
             if (!gruposProcesados.has(id) && sock) {
-                guardarLogLocal(`   🔄 Procesando grupo adicional de evento: ${id}`);
-                
                 let nombreGrupo = 'Sin nombre';
                 
                 if (groupCache.has(id)) {
                     const metadata = groupCache.get(id);
-                    if (metadata && metadata.subject) {
-                        nombreGrupo = metadata.subject;
-                        guardarLogLocal(`   📦 Nombre obtenido del CACHÉ (evento): ${nombreGrupo}`);
-                    }
+                    if (metadata && metadata.subject) nombreGrupo = metadata.subject;
                 }
                 
                 if (nombreGrupo === 'Sin nombre') {
                     const metadata = await obtenerMetadataGrupoConCache(sock, id);
-                    if (metadata && metadata.subject) {
-                        nombreGrupo = metadata.subject;
-                    }
+                    if (metadata && metadata.subject) nombreGrupo = metadata.subject;
                 }
                 
                 listaGrupos.push({
@@ -1464,7 +1111,6 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
             }
         }
         
-        guardarLogLocal(`✅ Total de grupos procesados: ${listaGrupos.length}`);
         return listaGrupos;
         
     } catch (error) {
@@ -1473,9 +1119,6 @@ async function obtenerGruposDesdeStore(sock, usarEspera = false) {
     }
 }
 
-// ============================================
-// FUNCIÓN PARA SINCRONIZAR GRUPOS CON GOOGLE SHEETS
-// ============================================
 async function sincronizarGruposConSheets(sock, url_sheets) {
     try {
         guardarLogLocal('🔄 Iniciando sincronización automática de grupos...');
@@ -1492,46 +1135,33 @@ async function sincronizarGruposConSheets(sock, url_sheets) {
         });
         
         if (respuesta.data && respuesta.data.success) {
-            guardarLogLocal(`✅ Sincronización automática completada: ${grupos.length} grupos`);
+            guardarLogLocal(`✅ Sincronización completada: ${grupos.length} grupos`);
             return true;
         } else {
-            guardarLogLocal(`⚠️ Error en sincronización: ${JSON.stringify(respuesta.data)}`);
             return false;
         }
         
     } catch (error) {
-        guardarLogLocal(`❌ Error en sincronización automática: ${error.message}`);
+        guardarLogLocal(`❌ Error en sincronización: ${error.message}`);
         return false;
     }
 }
 
-// ============================================
-// FUNCIÓN PARA ENVIAR GRUPOS A GOOGLE SHEETS
-// ============================================
 async function enviarGruposASheets(sock, url_sheets, grupos) {
     try {
-        guardarLogLocal('📤 Enviando grupos a Google Sheets...');
-        
         const respuesta = await axios.post(url_sheets, {
             grupos: grupos
         });
         
         if (respuesta.data && respuesta.data.success) {
-            guardarLogLocal(`✅ ${respuesta.data.mensaje}`);
             return true;
-        } else {
-            guardarLogLocal(`⚠️ Respuesta de Sheets: ${JSON.stringify(respuesta.data)}`);
-            return false;
         }
+        return false;
     } catch (error) {
-        guardarLogLocal(`❌ Error enviando a Sheets: ${error.message}`);
         return false;
     }
 }
 
-// ============================================
-// FUNCIÓN PARA GENERAR Y ENVIAR CSV
-// ============================================
 async function enviarCSVporWhatsApp(sock, remitente, grupos) {
     try {
         let csvContent = 'ID_GRUPO,NOMBRE_GRUPO\n';
@@ -1550,57 +1180,42 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
             caption: '📎 Archivo con la lista de grupos'
         });
         
-        guardarLogLocal('✅ CSV enviado por WhatsApp');
         return true;
     } catch (error) {
-        guardarLogLocal(`❌ Error enviando CSV: ${error.message}`);
         return false;
     }
 }
 
-// ============================================
-// NUEVAS FUNCIONES PARA INTERACCIONES (VERSIÓN 46.0 - CON MENCIONES)
-// ============================================
-
-// Función para obtener un texto aleatorio de un array de sinónimos
 function obtenerTextoAleatorio(arrayTextos) {
     if (!arrayTextos || arrayTextos.length === 0) return '';
     const indice = Math.floor(Math.random() * arrayTextos.length);
     return arrayTextos[indice];
 }
 
-// Función optimizada para extraer texto de cualquier tipo de mensaje
 function extraerTextoDeMensaje(mensaje) {
     if (!mensaje) return '';
     
-    // Priorizar los tipos más comunes primero (optimización)
     if (mensaje.conversation) return mensaje.conversation;
     if (mensaje.extendedTextMessage?.text) return mensaje.extendedTextMessage.text;
     if (mensaje.imageMessage?.caption) return mensaje.imageMessage.caption;
     if (mensaje.videoMessage?.caption) return mensaje.videoMessage.caption;
     if (mensaje.documentMessage?.caption) return mensaje.documentMessage.caption;
-    if (mensaje.audioMessage?.caption) return mensaje.audioMessage?.caption || '';
     
     return '';
 }
 
-// Función para verificar si el bot es mencionado (optimizada)
 function botEsMencionado(mensaje, botId) {
     if (!mensaje || !botId) return false;
     
-    // Verificar en extendedTextMessage
     const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
     if (mentionedJid && mentionedJid.includes(botId)) return true;
     
-    // Verificar en mensajes con caption
     if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
     if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
-    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
     
     return false;
 }
 
-// NUEVA FUNCIÓN: Verificar si el mensaje es una respuesta a un mensaje del bot
 function esRespuestaABot(mensaje, botId) {
     try {
         const contextInfo = mensaje?.extendedTextMessage?.contextInfo || 
@@ -1609,14 +1224,12 @@ function esRespuestaABot(mensaje, botId) {
         
         if (!contextInfo?.quotedMessage) return false;
         
-        // Verificar si el mensaje citado es del bot
         return contextInfo.participant === botId || contextInfo.quotedParticipant === botId;
     } catch (error) {
         return false;
     }
 }
 
-// Función optimizada para obtener producto desde mensaje citado (con fallback)
 async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
     try {
         const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
@@ -1633,30 +1246,25 @@ async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
         return extraerNombreProducto(textoOriginal);
         
     } catch (error) {
-        guardarLogLocal(`   ⚠️ Error obteniendo producto de mensaje citado: ${error.message}`);
         return null;
     }
 }
 
-// Función para clasificar la consulta del usuario (ampliada)
 function clasificarConsulta(texto) {
     const textoLower = texto.toLowerCase();
     
-    // Palabras clave para precio
     for (const palabra of CONFIG.palabras_clave_respondibles.precio) {
         if (textoLower.includes(palabra)) {
             return 'precio';
         }
     }
     
-    // Palabras clave para información
     for (const palabra of CONFIG.palabras_clave_respondibles.info) {
         if (textoLower.includes(palabra)) {
             return 'descripcion';
         }
     }
     
-    // Palabras clave genéricas
     for (const palabra of CONFIG.palabras_clave_respondibles.generica) {
         if (textoLower.includes(palabra)) {
             return 'generica';
@@ -1666,7 +1274,6 @@ function clasificarConsulta(texto) {
     return 'no_respondible';
 }
 
-// Función para obtener datos completos del producto desde el caché
 function obtenerDatosProducto(nombreProducto) {
     if (!nombreProducto || productosCache.length === 0) return null;
     
@@ -1677,17 +1284,14 @@ function obtenerDatosProducto(nombreProducto) {
     return producto;
 }
 
-// Función para generar respuesta automática según tipo de consulta
 function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto) {
     if (!nombreProducto || !datosProducto) return null;
     
     const opcionesRespuesta = CONFIG.respuestas_consultas[tipoConsulta];
     if (!opcionesRespuesta || opcionesRespuesta.length === 0) return null;
     
-    // Seleccionar una respuesta aleatoria
     let respuesta = obtenerTextoAleatorio(opcionesRespuesta);
     
-    // Reemplazar placeholders
     respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
     respuesta = respuesta.replace('[DESCRIPCION]', datosProducto.descripcion || '');
     respuesta = respuesta.replace('[PRECIO]', datosProducto.precio || '');
@@ -1695,7 +1299,6 @@ function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto)
     return respuesta;
 }
 
-// Función para generar enlace wa.me para alerta al admin
 function generarEnlaceWaMe(numeroCliente, nombreProducto, preguntaCliente) {
     const numeroLimpio = numeroCliente.split('@')[0].replace(/[^0-9]/g, '');
     const textoRespuesta = `Hola, sobre *${nombreProducto}*: ${preguntaCliente}`;
@@ -1703,17 +1306,15 @@ function generarEnlaceWaMe(numeroCliente, nombreProducto, preguntaCliente) {
     return `wa.me/${numeroLimpio}?text=${textoCodificado}`;
 }
 
-// Función para enviar alerta al admin
 async function enviarAlertaAdmin(sock, remitenteAdmin, datosAlerta) {
     try {
         const mensajeAlerta = `━━━━━━━━━━━━━━━━━━━━━━
 🔔 CONSULTA PENDIENTE
 
 📦 PRODUCTO: *${datosAlerta.producto}*
-👤 CLIENTE: ${datosAlerta.clienteNombre} (${datosAlerta.clienteNumero})
+👤 CLIENTE: ${datosAlerta.clienteNombre}
 💬 PREGUNTA: "${datosAlerta.pregunta}"
 📍 LUGAR: ${datosAlerta.lugar}
-⏱️ Hace ${datosAlerta.tiempo}
 
 👉 RESPUESTA RÁPIDA:
 ${datosAlerta.enlace}
@@ -1721,18 +1322,14 @@ ${datosAlerta.enlace}
 ━━━━━━━━━━━━━━━━━━━━━━`;
 
         await sock.sendMessage(remitenteAdmin, { text: mensajeAlerta });
-        guardarLogLocal(`   ✅ Alerta enviada al admin para producto: ${datosAlerta.producto}`);
         return true;
     } catch (error) {
-        guardarLogLocal(`   ❌ Error enviando alerta al admin: ${error.message}`);
         return false;
     }
 }
 
-// Función para procesar reacciones a mensajes (VERSIÓN 46.0 - CON MENCIÓN)
 async function procesarReaccion(sock, mensaje) {
     try {
-        // Verificar si es una reacción
         if (!mensaje.message?.reactionMessage) return false;
         
         const reaccion = mensaje.message.reactionMessage;
@@ -1740,64 +1337,48 @@ async function procesarReaccion(sock, mensaje) {
         const keyOriginal = reaccion.key;
         const usuarioId = mensaje.key.participant || mensaje.key.remoteJid;
         
-        // Verificar si la reacción es a un mensaje del bot
         if (!keyOriginal?.fromMe) return false;
         
-        // Verificar si el emoji está en nuestra lista de respuestas
         const respuestasReaccion = CONFIG.respuestas_reacciones[emoji];
         if (!respuestasReaccion) return false;
         
-        // Intentar obtener el mensaje original del store
         let textoOriginal = '';
         try {
             const mensajeOriginal = await store.loadMessage(keyOriginal.remoteJid, keyOriginal.id);
             if (mensajeOriginal) {
                 textoOriginal = extraerTextoDeMensaje(mensajeOriginal.message);
             }
-        } catch (e) {
-            // Si falla, continuamos sin el texto original
-        }
+        } catch (e) {}
         
         const nombreProducto = extraerNombreProducto(textoOriginal) || 'producto';
         
-        // Seleccionar respuesta aleatoria
         let respuesta = obtenerTextoAleatorio(respuestasReaccion);
         respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
         
-        // Añadir mención al usuario
         const mensajeConMencion = `@${usuarioId.split('@')[0]} ${respuesta}`;
         
-        // Simular typing antes de responder
         const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
         await simularTyping(sock, keyOriginal.remoteJid, delayTyping);
         
-        // Enviar respuesta en el mismo grupo con mención
         await sock.sendMessage(keyOriginal.remoteJid, { 
             text: mensajeConMencion,
             mentions: [usuarioId]
         });
-        guardarLogLocal(`   ✅ Respuesta a reacción ${emoji} para producto: ${nombreProducto} (con mención a @${usuarioId.split('@')[0]})`);
         
         return true;
     } catch (error) {
-        guardarLogLocal(`   ❌ Error procesando reacción: ${error.message}`);
         return false;
     }
 }
-
-// ============================================
-// SISTEMA DE COMANDOS PRIORITARIOS
-// ============================================
 
 let procesandoComandoPrioritario = false;
 
 async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
     try {
         procesandoComandoPrioritario = true;
-        guardarLogLocal(`   ⚡ PRIORITARIO: Procesando comando "${cmd}" inmediatamente`);
+        guardarLogLocal(`   ⚡ PRIORITARIO: Procesando comando "${cmd}"`);
         
         if (cmd === 'actualizar' || cmd === 'update') {
-            guardarLogLocal(`   Procesando comando prioritario: actualizar`);
             const resultado = await actualizarAgenda(sock, url_sheets, 'remoto');
             if (resultado) {
                 await sock.sendMessage(remitente, { text: '✅ Agenda actualizada correctamente' });
@@ -1807,9 +1388,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
         }
         
         else if (cmd === 'listagrupos' || cmd === 'grupos') {
-            guardarLogLocal(`   Procesando comando prioritario: listagrupos`);
-            
-            await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos (prioritario)...' });
+            await sock.sendMessage(remitente, { text: '🔄 Procesando lista de grupos...' });
             
             const grupos = await obtenerGruposDesdeStore(sock, true);
             
@@ -1820,19 +1399,16 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
             }
             
             const sheetsResult = await enviarGruposASheets(sock, url_sheets, grupos);
-            
             const csvResult = await enviarCSVporWhatsApp(sock, remitente, grupos);
             
-            let confirmacion = '✅ *PROCESO COMPLETADO (PRIORITARIO)*\n\n';
+            let confirmacion = '✅ *PROCESO COMPLETADO*\n\n';
             confirmacion += `📊 Total de grupos: ${grupos.length}\n`;
-            confirmacion += sheetsResult ? '✅ Guardado en Google Sheets (LISTA_GRUPOS)\n' : '❌ Error en Google Sheets\n';
+            confirmacion += sheetsResult ? '✅ Guardado en Google Sheets\n' : '❌ Error en Google Sheets\n';
             confirmacion += csvResult ? '✅ CSV enviado por WhatsApp\n' : '❌ Error enviando CSV\n';
-            confirmacion += `📚 Fuente: Consulta MASIVA (UNA SOLA LLAMADA)`;
             
             await sock.sendMessage(remitente, { text: confirmacion });
         }
         
-        guardarLogLocal(`   ✅ Comando prioritario completado`);
         procesandoComandoPrioritario = false;
         
     } catch (error) {
@@ -1841,46 +1417,11 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
     }
 }
 
-// ============================================
-// INICIAR CONEXIÓN WHATSAPP
-// ============================================
 async function iniciarWhatsApp() {
     console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 46.1 (FILTRO DE ESTADOS + MENCIONES)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 46.1');
+    console.log('📁 Ruta multimedia: /storage/emulated/0/');
     console.log('====================================\n');
-    console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
-    console.log('✍️  Typing adaptativo activado');
-    console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
-    console.log('📚 Data Store activado - Extrayendo grupos localmente');
-    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y 6am');
-    console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
-    console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
-    console.log('📁 Carpeta de archivos: ' + CONFIG.carpeta_multimedia);
-    console.log('👥 GRUPOS COMPLETOS: comando "listagrupos" espera 30 segundos');
-    console.log('⚡ CORRECCIÓN DE LATENCIA: mensajes procesados inmediatamente');
-    console.log('⚡⚡ NUEVO: SISTEMA DE COMANDOS PRIORITARIOS');
-    console.log('   - "actualizar" y "listagrupos" se procesan INMEDIATAMENTE');
-    console.log('🔄 RESTAURADO: Consulta masiva de grupos (UNA SOLA LLAMADA)');
-    console.log('🗑️  Las imágenes se eliminan automáticamente después de cada lote');
-    console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
-    console.log('📝 Logs locales (carpeta logs/)');
-    console.log('🎲 **SPINTEX Y SPINEMOJI CORREGIDOS PARA BAILEYS**');
-    console.log('📦 **MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-    console.log('   - Busca TODOS los archivos que coincidan con el nombre');
-    console.log('   - Orden: imágenes → videos → audios → documentos');
-    console.log('   - Texto personalizado para cada tipo de archivo');
-    console.log('⏱️ **DELAY INTELIGENTE ENTRE GRUPOS**');
-    console.log('   - Mide el tiempo real de cada envío');
-    console.log('   - Ajusta la espera automáticamente');
-    console.log('   - No acumula retrasos en el día');
-    console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
-    console.log('   - Ignora mensajes de status@broadcast');
-    console.log('   - Evita procesar estados como si fueran mensajes normales');
-    console.log('💬 **SISTEMA DE INTERACCIONES VERSIÓN 46.1**');
-    console.log('   - ✅ Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
-    console.log('   - ✅ MENCIONA al usuario en todas las respuestas');
-    console.log('   - ✅ TEXTOS PROFESIONALES para negocios');
-    console.log('   - ✅ Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1889,11 +1430,10 @@ async function iniciarWhatsApp() {
     }
 
     try {
-        // Cargar caché de productos al iniciar
         await actualizarCacheProductos(url_sheets);
         
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys versión: ${version.join('.')} ${isLatest ? '(última)' : ''}`);
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`📦 Baileys versión: ${version.join('.')}`);
         
         const logger = pino({ level: 'silent' });
         const { state, saveCreds } = await useMultiFileAuthState(CONFIG.carpeta_sesion);
@@ -1903,15 +1443,12 @@ async function iniciarWhatsApp() {
         let browserConfig;
         if (!existeSesion) {
             browserConfig = ["Ubuntu", "Chrome", "20.0.04"];
-            console.log('🌐 Browser: Ubuntu/Chrome (primera vez - para emparejamiento)');
+            console.log('🌐 Browser: Ubuntu/Chrome (primera vez)');
         } else {
             browserConfig = Browsers.macOS("Desktop");
-            console.log('🌐 Browser: macOS/Desktop (sesión existente - optimizado)');
+            console.log('🌐 Browser: macOS/Desktop');
         }
 
-        // ============================================
-        // CONFIGURACIÓN DEL SOCKET
-        // ============================================
         const sock = makeWASocket({
             version,
             auth: state,
@@ -1924,7 +1461,6 @@ async function iniciarWhatsApp() {
             shouldSyncHistoryMessage: () => false,
             generateHighQualityLinkPreview: true,
             cachedGroupMetadata: async (jid) => groupCache.get(jid),
-            // >>> MEJORA 1: Keep-Alive cada 25 segundos <<<
             keepAliveIntervalMs: 25000
         });
 
@@ -1978,17 +1514,15 @@ async function iniciarWhatsApp() {
                 
                 const agenda = cargarAgendaLocal();
                 if (agenda.grupos.length === 0) {
-                    guardarLogLocal('📥 Primera ejecución - descargando agenda completa...');
+                    guardarLogLocal('📥 Primera ejecución - descargando agenda...');
                     await actualizarAgenda(sock, url_sheets, 'primera vez');
                 }
                 
-                // Actualizar caché de productos
                 await actualizarCacheProductos(url_sheets);
                 
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
                 await sincronizarGruposConSheets(sock, url_sheets);
                 
-                // PROGRAMAR TODOS LOS ENVÍOS CON SETTIMEOUT
                 reprogramarTodosLosEnvios(sock);
             }
 
@@ -2008,91 +1542,61 @@ async function iniciarWhatsApp() {
         sock.ev.on('creds.update', saveCreds);
 
         cron.schedule('0 3 * * *', async () => {
-            guardarLogLocal('⏰ Ejecutando limpieza programada del Data Store (3 AM)');
+            guardarLogLocal('⏰ Ejecutando limpieza programada (3 AM)');
             limpiarStoreAntiguo();
         });
 
-        // SOLO 1 CRON JOB: A las 6am para actualizar agenda automáticamente
         cron.schedule('0 6 * * *', async () => {
             if (procesandoComandoPrioritario) {
-                guardarLogLocal('⏰ Actualización de 6am pospuesta (comando prioritario en ejecución)');
+                guardarLogLocal('⏰ Actualización de 6am pospuesta');
                 return;
             }
-            guardarLogLocal('⏰ ACTUALIZACIÓN AUTOMÁTICA DE AGENDA (6:00 AM)');
+            guardarLogLocal('⏰ ACTUALIZACIÓN AUTOMÁTICA (6:00 AM)');
             await actualizarAgenda(sock, url_sheets, 'automático 6am');
         });
 
-        // ============================================
-        // EVENTO DE MENSAJES (VERSIÓN 46.1 - CON FILTRO DE ESTADOS)
-        // ============================================
         sock.ev.on('messages.upsert', async (m) => {
             const mensaje = m.messages[0];
             
-            // Filtros rápidos (optimizados)
             if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) return;
 
             const remitente = mensaje.key.remoteJid;
             
-            // ============================================
-            // NUEVO FILTRO: Ignorar estados (status@broadcast)
-            // ============================================
             if (remitente === 'status@broadcast') {
-                return; // Ignorar completamente los estados
+                return;
             }
             
             const esGrupo = remitente.includes('@g.us');
             const mensajeId = mensaje.key.id;
 
-            // Evitar procesar el mismo mensaje múltiples veces
             if (mensajesEnProcesamiento.has(mensajeId)) return;
             mensajesEnProcesamiento.add(mensajeId);
-            
-            // Limpiar el set cada cierto tiempo para evitar crecimiento infinito
             setTimeout(() => mensajesEnProcesamiento.delete(mensajeId), 10000);
 
-            // ============================================
-            // PRIORIDAD 1: PROCESAR REACCIONES INMEDIATAMENTE
-            // ============================================
             if (mensaje.message?.reactionMessage) {
                 setImmediate(() => procesarReaccion(sock, mensaje));
                 return;
             }
 
-            // ============================================
-            // PARA GRUPOS: VERIFICAR SI DEBEMOS PROCESAR
-            // ============================================
             if (esGrupo) {
                 const esMencion = botEsMencionado(mensaje.message, sock.user.id);
                 const esRespuesta = esRespuestaABot(mensaje, sock.user.id);
                 
-                // Solo procesamos si es mención O es respuesta a un mensaje del bot
                 if (!esMencion && !esRespuesta) {
                     mensajesEnProcesamiento.delete(mensajeId);
                     return;
                 }
             }
 
-            // ============================================
-            // EXTRACCIÓN RÁPIDA DE TEXTO
-            // ============================================
             const texto = extraerTextoDeMensaje(mensaje.message);
             if (!texto || texto.trim() === '') {
                 mensajesEnProcesamiento.delete(mensajeId);
                 return;
             }
 
-            // ============================================
-            // LOG INMEDIATO (para depuración)
-            // ============================================
-            console.log('\n═══════════════════════════════════════════════');
-            console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${texto.substring(0, 50)}${texto.length > 50 ? '...' : ''}"`);
-            console.log('═══════════════════════════════════════════════\n');
-            
+            console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${texto.substring(0, 50)}"`);
             guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${texto.substring(0, 100)}"`);
 
-            // ============================================
-            // COMANDOS PRIORITARIOS (solo en privado)
-            // ============================================
             if (!esGrupo) {
                 const cmd = texto.toLowerCase().trim();
                 
@@ -2106,167 +1610,75 @@ async function iniciarWhatsApp() {
                 
                 else if (cmd === 'status' || cmd === 'estado') {
                     setImmediate(async () => {
-                        if (procesandoComandoPrioritario) {
-                            guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
-                            setTimeout(async () => {
-                                guardarLogLocal(`   Procesando comando: status (diferido)`);
-                                const agenda = cargarAgendaLocal();
-                                const total = agenda.grupos?.length || 0;
-                                const pestanas = Object.keys(agenda.pestanas || {}).length;
-                                const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                                
-                                // Obtener horarios programados para mostrar
-                                const horarios = new Set();
-                                if (agenda.pestanas) {
-                                    Object.values(agenda.pestanas).forEach(p => {
-                                        if (p.horario) horarios.add(p.horario);
-                                    });
-                                }
-                                
-                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
-                                              `⏰ MODO: setTimeout + Delay inteligente\n` +
-                                              `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-                                              `📋 Grupos totales: ${total}\n` +
-                                              `✅ Grupos activos: ${activos}\n` +
-                                              `📌 Pestañas: ${pestanas}\n` +
-                                              `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
-                                              `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
-                                              `📦 Múltiples archivos: ACTIVADO\n` +
-                                              `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                              `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
-                                              `✍️  Typing adaptativo: activado\n` +
-                                              `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                              `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                              `🔄 Actualización automática: 6:00 AM\n` +
-                                              `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                              `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                              `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
-                                              `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                              `⚡  Latencia: INMEDIATEZ OPTIMIZADA\n` +
-                                              `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
-                                              `🔄 Consulta masiva: RESTAURADA\n` +
-                                              `🗑️  Limpieza automática: activada\n` +
-                                              `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
-                                              `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                              `📤 Comando listagrupos: disponible (con caché)\n` +
-                                              `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                              `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                              `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
-                                
-                                await sock.sendMessage(remitente, { text: mensaje });
-                                mensajesEnProcesamiento.delete(mensajeId);
-                            }, 1000);
-                        } else {
-                            guardarLogLocal(`   Procesando comando: status`);
-                            const agenda = cargarAgendaLocal();
-                            const total = agenda.grupos?.length || 0;
-                            const pestanas = Object.keys(agenda.pestanas || {}).length;
-                            const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
-                            
-                            // Obtener horarios programados para mostrar
-                            const horarios = new Set();
-                            if (agenda.pestanas) {
-                                Object.values(agenda.pestanas).forEach(p => {
-                                    if (p.horario) horarios.add(p.horario);
-                                });
-                            }
-                            
-                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 46.1*\n\n` +
+                        const agenda = cargarAgendaLocal();
+                        const total = agenda.grupos?.length || 0;
+                        const pestanas = Object.keys(agenda.pestanas || {}).length;
+                        const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                        
+                        const horarios = new Set();
+                        if (agenda.pestanas) {
+                            Object.values(agenda.pestanas).forEach(p => {
+                                if (p.horario) horarios.add(p.horario);
+                            });
+                        }
+                        
+                        let mensajeStatus = `📊 *ESTADO DEL BOT*\n\n` +
                                           `⏰ MODO: setTimeout + Delay inteligente\n` +
                                           `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                           `📋 Grupos totales: ${total}\n` +
                                           `✅ Grupos activos: ${activos}\n` +
                                           `📌 Pestañas: ${pestanas}\n` +
-                                          `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
-                                          `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
-                                          `📦 Múltiples archivos: ACTIVADO\n` +
-                                          `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                          `💬 Interacciones: VERSIÓN 46.1 (filtro de estados + menciones)\n` +
-                                          `✍️  Typing adaptativo: activado\n` +
-                                          `🔗 Link Previews: CON IMAGEN (caché local)\n` +
-                                          `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                          `🔄 Actualización automática: 6:00 AM\n` +
-                                          `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
-                                          `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
-                                          `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
-                                          `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
-                                          `⚡  Latencia: INMEDIATEZ OPTIMIZADA\n` +
-                                          `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
-                                          `🔄 Consulta masiva: RESTAURADA\n` +
-                                          `🗑️  Limpieza automática: activada\n` +
-                                          `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
-                                          `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
-                                          `📤 Comando listagrupos: disponible (con caché)\n` +
-                                          `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                          `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)\n` +
-                                          `🚫 FILTRO DE ESTADOS: ACTIVADO (ignorando status@broadcast)`;
-                            
-                            await sock.sendMessage(remitente, { text: mensaje });
-                            mensajesEnProcesamiento.delete(mensajeId);
-                        }
+                                          `⏱️ Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
+                                          `📁 Ruta multimedia: /storage/emulated/0/\n` +
+                                          `🚫 Filtro de estados: ACTIVADO\n` +
+                                          `💬 Interacciones: VERSIÓN 46.1`;
+                        
+                        await sock.sendMessage(remitente, { text: mensajeStatus });
+                        mensajesEnProcesamiento.delete(mensajeId);
                     });
                     return;
                 }
             }
 
-            // ============================================
-            // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES) - VERSIÓN 46.1 CON MENCIÓN
-            // ============================================
             setImmediate(async () => {
                 try {
-                    // Obtener producto del mensaje citado
                     const nombreProducto = await obtenerProductoDesdeMensajeCitado(sock, mensaje);
                     if (!nombreProducto) {
                         mensajesEnProcesamiento.delete(mensajeId);
                         return;
                     }
 
-                    guardarLogLocal(`   🔍 Producto detectado en mensaje citado: "${nombreProducto}"`);
-
-                    // Obtener datos completos del producto
                     const datosProducto = obtenerDatosProducto(nombreProducto);
                     if (!datosProducto) {
                         mensajesEnProcesamiento.delete(mensajeId);
                         return;
                     }
 
-                    // Clasificar la consulta del usuario
                     const tipoConsulta = clasificarConsulta(texto);
                     const usuarioId = mensaje.key.participant || remitente;
 
                     if (tipoConsulta !== 'no_respondible') {
-                        // Generar respuesta automática
                         const respuesta = generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto);
                         if (respuesta) {
-                            // Añadir mención al usuario
                             const mensajeConMencion = `@${usuarioId.split('@')[0]} ${respuesta}`;
-                            
-                            // Simular typing antes de responder
                             const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
                             await simularTyping(sock, remitente, delayTyping);
-                            
                             await sock.sendMessage(remitente, { 
                                 text: mensajeConMencion,
                                 mentions: [usuarioId]
                             });
-                            guardarLogLocal(`   ✅ Respuesta automática enviada (${tipoConsulta}) con mención a @${usuarioId.split('@')[0]}`);
                         }
                     } else {
-                        // Enviar alerta al admin
-                        const clienteNumero = remitente.split('@')[0];
-                        const lugar = esGrupo ? `Grupo` : `Chat privado`;
                         const enlace = generarEnlaceWaMe(remitente, nombreProducto, texto);
-                        
                         const datosAlerta = {
                             producto: nombreProducto,
-                            clienteNombre: clienteNumero,
-                            clienteNumero: clienteNumero,
+                            clienteNombre: remitente.split('@')[0],
+                            clienteNumero: remitente.split('@')[0],
                             pregunta: texto,
-                            lugar: lugar,
+                            lugar: esGrupo ? 'Grupo' : 'Chat privado',
                             tiempo: 'ahora mismo',
                             enlace: enlace
                         };
-                        
                         await enviarAlertaAdmin(sock, sock.user.id, datosAlerta);
                     }
                 } catch (error) {
@@ -2277,29 +1689,14 @@ async function iniciarWhatsApp() {
             });
         });
 
-        console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - ⚡ PRIORITARIO (reprograma todos los horarios)');
+        console.log('\n📝 Comandos disponibles:');
+        console.log('   - "actualizar" - ⚡ PRIORITARIO');
         console.log('   - "listagrupos" - ⚡ PRIORITARIO');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
-        console.log('📦 **MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-        console.log('   - Ejemplo: Si el producto es "gorra", busca:');
-        console.log('     gorra.jpg (imagen con texto)');
-        console.log('     gorra.mp4 (🎬 video de gorra)');
-        console.log('     gorra.pdf (📄 información de gorra)');
-        console.log('⏱️ **DELAY INTELIGENTE**');
-        console.log('   - Se adapta automáticamente al tiempo real de envío');
-        console.log('⚡ **INMEDIATEZ OPTIMIZADA**');
-        console.log('   - Los mensajes se procesan inmediatamente al llegar');
-        console.log('   - Simulación de typing antes de responder (1-3 segundos)');
-        console.log('🚫 **FILTRO DE ESTADOS ACTIVADO**');
-        console.log('   - Ignora mensajes de status@broadcast');
-        console.log('   - Evita procesar estados como si fueran mensajes normales');
-        console.log('💬 **INTERACCIONES VERSIÓN 46.1**');
-        console.log('   - Responde a RESPUESTAS (sin @) y MENCIONES (con @)');
-        console.log('   - MENCIONA al usuario en todas las respuestas');
-        console.log('   - TEXTOS PROFESIONALES para negocios');
-        console.log('   - Reacciona con 👍❤️😮🙏😂 y el bot responderá mencionándote\n');
+        console.log('📁 Los archivos multimedia se buscan en: /storage/emulated/0/');
+        console.log('   Ejemplo: si el producto es "gorra", busca TODOS los archivos');
+        console.log('   que contengan "gorra" en el nombre (gorra.jpg, gorra.mp4, etc.)\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
@@ -2310,13 +1707,7 @@ async function iniciarWhatsApp() {
 process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
-    
-    // Cancelar todos los timers antes de salir
-    if (timersEnvios.length > 0) {
-        guardarLogLocal(`🔄 Cancelando ${timersEnvios.length} timers activos...`);
-        timersEnvios.forEach(timer => clearTimeout(timer));
-    }
-    
+    cancelarTodosLosTimers();
     limpiarCacheImagenes();
     store.writeToFile(CONFIG.archivo_store);
     process.exit(0);
