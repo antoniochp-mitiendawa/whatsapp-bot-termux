@@ -1,21 +1,19 @@
 // ============================================
 // BOT DE WHATSAPP PARA TERMUX
-// Versión: 43.0 - SPINTEX LIMPIO + TABLA DE ARCHIVOS + MÚLTIPLES ARCHIVOS
 // Versión: 44.0 - INTERACCIONES + REACCIONES + MENCIONES
+// Versión: 45.0 - INMEDIATEZ + INTERACCIONES + REACCIONES + MENCIONES
 // + MEJORA 1: Keep-Alive cada 25 segundos
-// + MEJORA 2: Ignorar mensajes de grupos
 // + MEJORA 2: Ignorar mensajes de grupos (sin mención)
+// + MEJORA 3: PROCESAMIENTO INMEDIATO DE MENSAJES
+//   - SetImmediate para mensajes interactivos
+//   - Optimización de extracción de texto
+//   - Priorización de eventos
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
 // + NUEVO: Tabla de correspondencia producto-archivo
 // + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados con setTimeout)
 // + MEJORA: Al actualizar, reprograma todos los envíos
 // + MEJORA: 1 cron job a las 6am solo para actualizar agenda
 // + VERSIÓN 43.0: Múltiples archivos por producto
-//   - Busca TODOS los archivos que coincidan con el nombre del producto
-//   - Los ordena: imágenes primero, luego videos, luego audios, luego documentos
-//   - El texto del mensaje SOLO va con la PRIMERA imagen
-//   - Los archivos siguientes llevan textos personalizados por tipo
-//   - Delay inteligente entre grupos que considera el tiempo real de envío
 // + VERSIÓN 44.0: Interacciones con menciones, respuestas y reacciones
 //   - Detecta menciones al bot en grupos (@bot)
 //   - Detecta respuestas a mensajes del bot (quotedMessage)
@@ -26,122 +24,119 @@
 //   - Detecta reacciones a mensajes del bot (👍❤️😮🙏😂)
 //   - Responde en el grupo con texto personalizado por reacción
 //   - Usa sinónimos para variedad en respuestas
+// + VERSIÓN 45.0: Optimización de inmediatez y respuestas a mensajes deslizados
+//   - Procesamiento prioritario de mensajes entrantes
+//   - Simulación de typing antes de respuestas
+//   - Fallback para mensajes citados no encontrados en store
+//   - Mejora en detección de menciones en todo tipo de mensajes
+//   - Clasificación ampliada de consultas
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
-@@ -49,13 +54,86 @@ const CONFIG = {
-dias_retencion_store: 30,
-carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
-tiempo_espera_grupos: 30000,
-    // NUEVA CONFIGURACIÓN PARA MÚLTIPLES ARCHIVOS
-    // CONFIGURACIÓN PARA MÚLTIPLES ARCHIVOS
-delay_entre_archivos: 3, // segundos entre cada archivo del mismo grupo
-textos_por_tipo: {
-imagen: '', // El texto principal ya se usa con la primera imagen
-video: '🎬 Te dejo un video de *[PRODUCTO]*',
-audio: '🔊 Escucha más detalles de *[PRODUCTO]*',
-documento: '📄 Aquí tienes más información de *[PRODUCTO]*'
-    },
-    // NUEVA CONFIGURACIÓN PARA INTERACCIONES
-    textos_sinonimos: {
-        saludos: ["¡Hola! 👋", "¡Qué tal! ✨", "¡Buen día! ☀️", "¡Hola, ¿cómo estás? 😊", "¡Un gusto saludarte! 🤝"],
-        agradecimientos: ["¡Gracias! 🙏", "Muchas gracias 😊", "Te lo agradezco ✨", "Gracias totales 🙌", "¡Mil gracias! 🌟"],
-        ofertas: ["¿Te interesa? 🤔", "¿Quieres una? 🛍️", "¿Te gustaría adquirirla? 🎁", "¿La quieres para ti? ✨", "¿Te animas? 💫"],
-        contacto: ["Estoy a tus órdenes 🤝", "Aquí estoy para ayudarte 👋", "Puedes escribirme cuando quieras 📱", "Para lo que necesites, aquí estoy 💬", "Cuenta conmigo para lo que necesites 🌟"],
-        despedidas: ["¡Hasta luego! 👋", "¡Que tengas buen día! ☀️", "¡Nos vemos pronto! ✨", "¡Cuidate mucho! 🙏", "¡Hasta la próxima! 🌟"]
-    },
-    respuestas_reacciones: {
-        "👍": [
-            "👋 ¡Gracias por el like! La *[PRODUCTO]* está disponible. ¿Te interesa?",
-            "👍 ¡Qué bueno que te gustó! La *[PRODUCTO]* es excelente. ¿Quieres una?",
-            "🙌 Me alegra que te guste *[PRODUCTO]*. Estoy a tus órdenes",
-            "✨ ¡Gracias! La *[PRODUCTO]* es de las más vendidas. ¿Te animas?",
-            "👏 ¡Aprecio tu like! Para cualquier duda sobre *[PRODUCTO]*, aquí estoy"
-        ],
-        "❤️": [
-            "❤️ ¡Gracias por el corazón! Me encanta que te guste *[PRODUCTO]*",
-            "💖 ¡Qué bonito! *[PRODUCTO]* es especial. ¿Quieres más información?",
-            "💝 ¡Corazón recibido! ¿Te gustaría adquirir *[PRODUCTO]*?",
-            "💗 Me alegra mucho que te guste *[PRODUCTO]*. Estoy aquí para ayudarte",
-            "💕 ¡Gracias! *[PRODUCTO]* tiene muchos admiradores. ¿Te cuento más?"
-        ],
-        "😮": [
-            "😮 ¿Sorprendido? *[PRODUCTO]* es increíble, ¿quieres conocer más?",
-            "😲 ¡Vaya, impactante! ¿Te gustaría saber más de *[PRODUCTO]*?",
-            "🤯 Increíble, ¿verdad? *[PRODUCTO]* tiene muchos secretos. ¿Te interesa?",
-            "😱 ¡Me encanta tu reacción! *[PRODUCTO]* es único. ¿Quieres una?",
-            "🌟 Así es, *[PRODUCTO]* es sorprendente. ¿Te animas a probarlo?"
-        ],
-        "🙏": [
-            "🙏 ¡Gracias a ti! Para cualquier duda sobre *[PRODUCTO]*, aquí estoy",
-            "🤝 ¡Aprecio tu mensaje! Cuenta conmigo para *[PRODUCTO]*",
-            "✨ Gracias por comunicarte. ¿Necesitas algo más de *[PRODUCTO]*?",
-            "💫 ¡Un placer! Estoy aquí para lo que necesites sobre *[PRODUCTO]*",
-            "🌟 Gracias a ti por tu interés. ¿Te ayudo con algo más?"
-        ],
-        "😂": [
-            "😂 Me alegra que te cause gracia *[PRODUCTO]*. ¿Quieres ver más productos?",
-            "😄 ¡Qué risa! ¿Te gustaría conocer otros productos similares?",
-            "🤣 Me encanta tu sentido del humor. ¿Te interesa *[PRODUCTO]*?",
-            "😆 ¡Buenísimo! Si quieres más info de *[PRODUCTO]*, aquí estoy",
-            "🎉 Me alegra sacarte una sonrisa. ¿Te cuento más de *[PRODUCTO]*?"
-        ]
-    },
-    respuestas_consultas: {
-        generica: [
-            "👕 *[PRODUCTO]* - [DESCRIPCION] - 💵 [PRECIO]",
-            "✨ *[PRODUCTO]*: [DESCRIPCION]. Precio: 💵 [PRECIO]",
-            "📦 *[PRODUCTO]* disponible. [DESCRIPCION] - 💵 [PRECIO]",
-            "🎁 *[PRODUCTO]*: [DESCRIPCION]. Solo 💵 [PRECIO]",
-            "🌟 *[PRODUCTO]* - [DESCRIPCION] - 💵 [PRECIO]. ¿Te interesa?"
-        ],
-        precio: [
-            "La *[PRODUCTO]* está a 💵 [PRECIO]. ¿Te interesa?",
-            "💰 Precio de *[PRODUCTO]*: 💵 [PRECIO]. ¿Quieres una?",
-            "💵 *[PRODUCTO]* cuesta 💵 [PRECIO]. ¿Te animas?",
-            "El valor de *[PRODUCTO]* es 💵 [PRECIO]. Escríbeme si quieres",
-            "💲 *[PRODUCTO]*: 💵 [PRECIO]. Estoy a tus órdenes"
-        ],
-        descripcion: [
-            "📝 *[PRODUCTO]*: [DESCRIPCION]. Precio: 💵 [PRECIO]",
-            "✨ Características de *[PRODUCTO]*: [DESCRIPCION]. Valor: 💵 [PRECIO]",
-            "🔍 *[PRODUCTO]*: [DESCRIPCION]. ¿Te gustaría adquirirla?",
-            "📋 *[PRODUCTO]*: [DESCRIPCION]. Solo 💵 [PRECIO]",
-            "🎯 *[PRODUCTO]*: [DESCRIPCION]. ¿Quieres más información?"
-        ]
-    },
-    palabras_clave_respondibles: {
+@@ -131,10 +132,13 @@ const CONFIG = {
+]
+},
+palabras_clave_respondibles: {
         precio: ["precio", "cuesta", "valor", "$$", "💰", "💵", "costó", "precio?"],
         info: ["info", "información", "características", "descripción", "qué es", "detalles"],
         generica: ["más", "info", "información", "quiero saber", "dime"]
-}
+    }
+        precio: ["precio", "cuesta", "valor", "$$", "💰", "💵", "costó", "precio?", "cuánto", "cuanto", "costo", "precio", "vale", "valor?"],
+        info: ["info", "información", "características", "descripción", "qué es", "detalles", "descripcion", "caracteristicas", "como es", "que tiene"],
+        generica: ["más", "info", "información", "quiero saber", "dime", "mas", "informacion", "saber", "conocer", "interesa", "me interesa"]
+    },
+    // NUEVA CONFIGURACIÓN PARA INMEDIATEZ
+    delay_respuesta_min: 1, // segundos mínimos antes de responder (simular typing)
+    delay_respuesta_max: 3  // segundos máximos antes de responder
 };
 
-@@ -1477,6 +1555,186 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
-}
+// ============================================
+@@ -194,6 +198,9 @@ let imagenesUsadasEnLote = new Set();
+let productosCache = [];
+let ultimaActualizacionProductos = 0;
+
+// Variable para controlar mensajes en procesamiento (evitar doble respuesta)
+const mensajesEnProcesamiento = new Set();
+
+// ============================================
+// FUNCIÓN PARA OBTENER METADATOS DE GRUPO CON CACHÉ
+// ============================================
+@@ -673,7 +680,7 @@ function guardarLogLocal(texto) {
+
+fs.appendFileSync(logFile, linea + '\n');
+
+    if (texto.includes('📩 Mensaje recibido')) {
+    if (texto.includes('📩 MENSAJE RECIBIDO')) {
+console.log('\x1b[32m%s\x1b[0m', `📩 ${texto}`);
+} else if (texto.includes('⚡ PRIORITARIO')) {
+console.log('\x1b[33m%s\x1b[0m', `⚡ ${texto}`);
+@@ -940,6 +947,7 @@ function buscarArchivosPorProducto(nombreProducto) {
+// NUEVA FUNCIÓN: Extraer nombre del producto del texto (CORREGIDA)
+// ============================================
+function extraerNombreProducto(texto) {
+    if (!texto) return null;
+// Buscar el ÚLTIMO par de asteriscos en el mensaje (que es donde está el producto)
+const matches = [...texto.matchAll(/\*([^*]+)\*/g)];
+if (matches.length > 0) {
+@@ -1556,7 +1564,7 @@ async function enviarCSVporWhatsApp(sock, remitente, grupos) {
 }
 
 // ============================================
 // NUEVAS FUNCIONES PARA INTERACCIONES
+// NUEVAS FUNCIONES PARA INTERACCIONES (OPTIMIZADAS)
 // ============================================
 
 // Función para obtener un texto aleatorio de un array de sinónimos
-function obtenerTextoAleatorio(arrayTextos) {
-    if (!arrayTextos || arrayTextos.length === 0) return '';
-    const indice = Math.floor(Math.random() * arrayTextos.length);
-    return arrayTextos[indice];
+@@ -1566,34 +1574,60 @@ function obtenerTextoAleatorio(arrayTextos) {
+return arrayTextos[indice];
 }
 
 // Función para obtener el producto desde un mensaje citado
+// Función optimizada para extraer texto de cualquier tipo de mensaje
+function extraerTextoDeMensaje(mensaje) {
+    if (!mensaje) return '';
+    
+    // Priorizar los tipos más comunes primero (optimización)
+    if (mensaje.conversation) return mensaje.conversation;
+    if (mensaje.extendedTextMessage?.text) return mensaje.extendedTextMessage.text;
+    if (mensaje.imageMessage?.caption) return mensaje.imageMessage.caption;
+    if (mensaje.videoMessage?.caption) return mensaje.videoMessage.caption;
+    if (mensaje.documentMessage?.caption) return mensaje.documentMessage.caption;
+    if (mensaje.audioMessage?.caption) return mensaje.audioMessage?.caption || '';
+    
+    return '';
+}
+
+// Función optimizada para verificar si el bot es mencionado
+function botEsMencionado(mensaje, botId) {
+    if (!mensaje || !botId) return false;
+    
+    // Verificar en extendedTextMessage
+    const mentionedJid = mensaje?.extendedTextMessage?.contextInfo?.mentionedJid;
+    if (mentionedJid && mentionedJid.includes(botId)) return true;
+    
+    // Verificar en mensajes con caption
+    if (mensaje?.imageMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.videoMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    if (mensaje?.documentMessage?.contextInfo?.mentionedJid?.includes(botId)) return true;
+    
+    return false;
+}
+
+// Función optimizada para obtener producto desde mensaje citado (con fallback)
 async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
-    try {
+try {
         if (!mensaje.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
             return null;
         }
-        
+        const contextInfo = mensaje.message?.extendedTextMessage?.contextInfo || 
+                           mensaje.message?.imageMessage?.contextInfo ||
+                           mensaje.message?.videoMessage?.contextInfo;
+
         const quotedMsg = mensaje.message.extendedTextMessage.contextInfo.quotedMessage;
         let textoOriginal = '';
-        
+        if (!contextInfo?.quotedMessage) return null;
+
         if (quotedMsg.conversation) {
             textoOriginal = quotedMsg.conversation;
         } else if (quotedMsg.extendedTextMessage?.text) {
@@ -151,128 +146,44 @@ async function obtenerProductoDesdeMensajeCitado(sock, mensaje) {
         } else if (quotedMsg.videoMessage?.caption) {
             textoOriginal = quotedMsg.videoMessage.caption;
         }
+        const quotedMsg = contextInfo.quotedMessage;
+        const textoOriginal = extraerTextoDeMensaje(quotedMsg);
         
-        return extraerNombreProducto(textoOriginal);
-    } catch (error) {
-        guardarLogLocal(`   ⚠️ Error obteniendo producto de mensaje citado: ${error.message}`);
-        return null;
-    }
+        if (!textoOriginal) return null;
+
+return extraerNombreProducto(textoOriginal);
+        
+} catch (error) {
+guardarLogLocal(`   ⚠️ Error obteniendo producto de mensaje citado: ${error.message}`);
+return null;
+}
 }
 
 // Función para clasificar la consulta del usuario
+// Función para clasificar la consulta del usuario (ampliada)
 function clasificarConsulta(texto) {
-    const textoLower = texto.toLowerCase();
-    
-    // Palabras clave para precio
-    for (const palabra of CONFIG.palabras_clave_respondibles.precio) {
-        if (textoLower.includes(palabra)) {
-            return 'precio';
-        }
-    }
-    
-    // Palabras clave para información
-    for (const palabra of CONFIG.palabras_clave_respondibles.info) {
-        if (textoLower.includes(palabra)) {
-            return 'descripcion';
-        }
-    }
-    
-    // Palabras clave genéricas
-    for (const palabra of CONFIG.palabras_clave_respondibles.generica) {
-        if (textoLower.includes(palabra)) {
-            return 'generica';
-        }
-    }
-    
-    return 'no_respondible';
+const textoLower = texto.toLowerCase();
+
+@@ -1684,7 +1718,7 @@ ${datosAlerta.enlace}
 }
-
-// Función para obtener datos completos del producto desde el caché
-function obtenerDatosProducto(nombreProducto) {
-    if (!nombreProducto || productosCache.length === 0) return null;
-    
-    const producto = productosCache.find(p => 
-        p.producto.toLowerCase() === nombreProducto.toLowerCase()
-    );
-    
-    return producto;
-}
-
-// Función para generar respuesta automática según tipo de consulta
-function generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto) {
-    if (!nombreProducto || !datosProducto) return null;
-    
-    const opcionesRespuesta = CONFIG.respuestas_consultas[tipoConsulta];
-    if (!opcionesRespuesta || opcionesRespuesta.length === 0) return null;
-    
-    // Seleccionar una respuesta aleatoria
-    let respuesta = obtenerTextoAleatorio(opcionesRespuesta);
-    
-    // Reemplazar placeholders
-    respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
-    respuesta = respuesta.replace('[DESCRIPCION]', datosProducto.descripcion || '');
-    respuesta = respuesta.replace('[PRECIO]', datosProducto.precio || '');
-    
-    return respuesta;
-}
-
-// Función para generar enlace wa.me para alerta al admin
-function generarEnlaceWaMe(numeroCliente, nombreProducto, preguntaCliente) {
-    const numeroLimpio = numeroCliente.split('@')[0].replace(/[^0-9]/g, '');
-    const textoRespuesta = `Hola, sobre *${nombreProducto}*: ${preguntaCliente}`;
-    const textoCodificado = encodeURIComponent(textoRespuesta);
-    return `wa.me/${numeroLimpio}?text=${textoCodificado}`;
-}
-
-// Función para enviar alerta al admin
-async function enviarAlertaAdmin(sock, remitenteAdmin, datosAlerta) {
-    try {
-        const mensajeAlerta = `━━━━━━━━━━━━━━━━━━━━━━
-🔔 CONSULTA PENDIENTE
-
-📦 PRODUCTO: *${datosAlerta.producto}*
-👤 CLIENTE: ${datosAlerta.clienteNombre} (${datosAlerta.clienteNumero})
-💬 PREGUNTA: "${datosAlerta.pregunta}"
-📍 LUGAR: ${datosAlerta.lugar}
-⏱️ Hace ${datosAlerta.tiempo}
-
-👉 RESPUESTA RÁPIDA:
-${datosAlerta.enlace}
-
-━━━━━━━━━━━━━━━━━━━━━━`;
-
-        await sock.sendMessage(remitenteAdmin, { text: mensajeAlerta });
-        guardarLogLocal(`   ✅ Alerta enviada al admin para producto: ${datosAlerta.producto}`);
-        return true;
-    } catch (error) {
-        guardarLogLocal(`   ❌ Error enviando alerta al admin: ${error.message}`);
-        return false;
-    }
 }
 
 // Función para procesar reacciones a mensajes
+// Función para procesar reacciones a mensajes (optimizada)
 async function procesarReaccion(sock, mensaje) {
-    try {
-        // Verificar si es una reacción
-        if (!mensaje.message?.reactionMessage) return false;
-        
-        const reaccion = mensaje.message.reactionMessage;
-        const emoji = reaccion.text;
-        const keyOriginal = reaccion.key;
-        
-        // Verificar si la reacción es a un mensaje del bot
-        if (!keyOriginal?.fromMe) return false;
-        
-        // Verificar si el emoji está en nuestra lista de respuestas
-        const respuestasReaccion = CONFIG.respuestas_reacciones[emoji];
-        if (!respuestasReaccion) return false;
-        
+try {
+// Verificar si es una reacción
+@@ -1701,29 +1735,27 @@ async function procesarReaccion(sock, mensaje) {
+const respuestasReaccion = CONFIG.respuestas_reacciones[emoji];
+if (!respuestasReaccion) return false;
+
         // Obtener el mensaje original al que reaccionaron
         const mensajeOriginal = await store.loadMessage(keyOriginal.remoteJid, keyOriginal.id);
         if (!mensajeOriginal) return false;
         
         // Extraer producto del mensaje original
-        let textoOriginal = '';
+        // Intentar obtener el mensaje original del store
+let textoOriginal = '';
         if (mensajeOriginal.message?.conversation) {
             textoOriginal = mensajeOriginal.message.conversation;
         } else if (mensajeOriginal.message?.extendedTextMessage?.text) {
@@ -281,187 +192,332 @@ async function procesarReaccion(sock, mensaje) {
             textoOriginal = mensajeOriginal.message.imageMessage.caption;
         } else if (mensajeOriginal.message?.videoMessage?.caption) {
             textoOriginal = mensajeOriginal.message.videoMessage.caption;
-        }
-        
-        const nombreProducto = extraerNombreProducto(textoOriginal);
-        if (!nombreProducto) return false;
-        
-        // Seleccionar respuesta aleatoria
-        let respuesta = obtenerTextoAleatorio(respuestasReaccion);
-        respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
-        
-        // Enviar respuesta en el mismo grupo
-        await sock.sendMessage(keyOriginal.remoteJid, { text: respuesta });
-        guardarLogLocal(`   ✅ Respuesta a reacción ${emoji} para producto: ${nombreProducto}`);
-        
-        return true;
-    } catch (error) {
-        guardarLogLocal(`   ❌ Error procesando reacción: ${error.message}`);
-        return false;
-    }
+        try {
+            const mensajeOriginal = await store.loadMessage(keyOriginal.remoteJid, keyOriginal.id);
+            if (mensajeOriginal) {
+                textoOriginal = extraerTextoDeMensaje(mensajeOriginal.message);
+            }
+        } catch (e) {
+            // Si falla, continuamos sin el texto original
 }
 
-// ============================================
-// SISTEMA DE COMANDOS PRIORITARIOS
-// ============================================
-@@ -1538,7 +1796,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
+        const nombreProducto = extraerNombreProducto(textoOriginal);
+        if (!nombreProducto) return false;
+        const nombreProducto = extraerNombreProducto(textoOriginal) || 'producto';
+
+// Seleccionar respuesta aleatoria
+let respuesta = obtenerTextoAleatorio(respuestasReaccion);
+respuesta = respuesta.replace('[PRODUCTO]', nombreProducto);
+
+        // Simular typing antes de responder
+        const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
+        await simularTyping(sock, keyOriginal.remoteJid, delayTyping);
+        
+// Enviar respuesta en el mismo grupo
+await sock.sendMessage(keyOriginal.remoteJid, { text: respuesta });
+guardarLogLocal(`   ✅ Respuesta a reacción ${emoji} para producto: ${nombreProducto}`);
+@@ -1796,7 +1828,7 @@ async function procesarComandoPrioritario(sock, cmd, remitente, url_sheets) {
 // ============================================
 async function iniciarWhatsApp() {
 console.log('====================================');
-    console.log('🤖 BOT WHATSAPP - VERSIÓN 43.0 (MÚLTIPLES ARCHIVOS + DELAY INTELIGENTE)');
     console.log('🤖 BOT WHATSAPP - VERSIÓN 44.0 (INTERACCIONES + REACCIONES + MENCIONES)');
+    console.log('🤖 BOT WHATSAPP - VERSIÓN 45.0 (INMEDIATEZ + INTERACCIONES)');
 console.log('====================================\n');
 console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
 console.log('✍️  Typing adaptativo activado');
-@@ -1557,14 +1815,21 @@ async function iniciarWhatsApp() {
-console.log('🌐 Browser: Ubuntu (1ra vez) / macOS (sesiones existentes)');
-console.log('📝 Logs locales (carpeta logs/)');
-console.log('🎲 **SPINTEX Y SPINEMOJI CORREGIDOS PARA BAILEYS**');
-    console.log('📦 **NUEVO: MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-    console.log('📦 **MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-console.log('   - Busca TODOS los archivos que coincidan con el nombre');
-console.log('   - Orden: imágenes → videos → audios → documentos');
-console.log('   - Texto personalizado para cada tipo de archivo');
-    console.log('⏱️ **NUEVO: DELAY INTELIGENTE ENTRE GRUPOS**');
-    console.log('⏱️ **DELAY INTELIGENTE ENTRE GRUPOS**');
+@@ -1823,12 +1855,14 @@ async function iniciarWhatsApp() {
 console.log('   - Mide el tiempo real de cada envío');
 console.log('   - Ajusta la espera automáticamente');
-    console.log('   - No acumula retrasos en el día\n');
-    console.log('   - No acumula retrasos en el día');
+console.log('   - No acumula retrasos en el día');
     console.log('💬 **NUEVO: SISTEMA DE INTERACCIONES**');
-    console.log('   - ✅ Detecta menciones al bot en grupos (@bot)');
-    console.log('   - ✅ Detecta respuestas a mensajes del bot');
-    console.log('   - ✅ Responde automáticamente a consultas de precio/info');
-    console.log('   - ✅ Alerta al admin con enlace wa.me para preguntas no respondibles');
-    console.log('   - ✅ Detecta reacciones (👍❤️😮🙏😂) y responde en el grupo');
-    console.log('   - ✅ Usa sinónimos para variedad en respuestas\n');
+    console.log('💬 **SISTEMA DE INTERACCIONES OPTIMIZADO**');
+    console.log('   - ✅ PROCESAMIENTO INMEDIATO de mensajes entrantes');
+console.log('   - ✅ Detecta menciones al bot en grupos (@bot)');
+console.log('   - ✅ Detecta respuestas a mensajes del bot');
+console.log('   - ✅ Responde automáticamente a consultas de precio/info');
+console.log('   - ✅ Alerta al admin con enlace wa.me para preguntas no respondibles');
+console.log('   - ✅ Detecta reacciones (👍❤️😮🙏😂) y responde en el grupo');
+    console.log('   - ✅ Simula typing antes de responder (1-3 segundos)');
+console.log('   - ✅ Usa sinónimos para variedad en respuestas\n');
 
 const url_sheets = leerURL();
-if (!url_sheets) {
-@@ -1707,12 +1972,7 @@ async function iniciarWhatsApp() {
+@@ -1972,74 +2006,128 @@ async function iniciarWhatsApp() {
 });
 
 // ============================================
-        // ELIMINADO: El cron job que verificaba cada minuto
-        // ELIMINADO: Los cron jobs de sincronización de grupos
-        // ============================================
-
-        // ============================================
-        // EVENTO DE MENSAJES
         // EVENTO DE MENSAJES (MODIFICADO CON NUEVAS FUNCIONALIDADES)
+        // EVENTO DE MENSAJES (VERSIÓN 45.0 - OPTIMIZADA PARA INMEDIATEZ)
 // ============================================
 sock.ev.on('messages.upsert', async (m) => {
 const mensaje = m.messages[0];
-@@ -1722,21 +1982,44 @@ async function iniciarWhatsApp() {
-}
 
-const remitente = mensaje.key.remoteJid;
-            const esGrupo = remitente.includes('@g.us');
-            const esPrivado = !esGrupo;
-
-            // ============================================
-            // PROCESAR REACCIONES (para grupos y privado)
-            // ============================================
-            if (mensaje.message?.reactionMessage) {
-                await procesarReaccion(sock, mensaje);
+            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) {
                 return;
             }
+            // Filtros rápidos (optimizados)
+            if (!mensaje.key || mensaje.key.fromMe || !mensaje.message) return;
 
-            // >>> MEJORA 2: Ignorar mensajes de grupos completamente <<<
-            if (remitente && remitente.includes('@g.us')) {
-                return; // No procesar mensajes de grupos
-            // ============================================
+const remitente = mensaje.key.remoteJid;
+const esGrupo = remitente.includes('@g.us');
+            const esPrivado = !esGrupo;
+            const mensajeId = mensaje.key.id;
+
+            // Evitar procesar el mismo mensaje múltiples veces
+            if (mensajesEnProcesamiento.has(mensajeId)) return;
+            mensajesEnProcesamiento.add(mensajeId);
+            
+            // Limpiar el set cada cierto tiempo para evitar crecimiento infinito
+            setTimeout(() => mensajesEnProcesamiento.delete(mensajeId), 10000);
+
+// ============================================
+            // PROCESAR REACCIONES (para grupos y privado)
+            // PRIORIDAD 1: PROCESAR REACCIONES INMEDIATAMENTE
+// ============================================
+if (mensaje.message?.reactionMessage) {
+                await procesarReaccion(sock, mensaje);
+                setImmediate(() => procesarReaccion(sock, mensaje));
+return;
+}
+
+// ============================================
             // PARA GRUPOS: SOLO PROCESAR SI HAY MENCIÓN
-            // ============================================
-            if (esGrupo) {
+            // PARA GRUPOS: VERIFICAR MENCIÓN (rápido)
+// ============================================
+if (esGrupo) {
                 // Verificar si el bot es mencionado
                 const mentionedJid = mensaje.message?.extendedTextMessage?.contextInfo?.mentionedJid;
                 const botMentioned = mentionedJid && mentionedJid.includes(sock.user.id);
                 
                 if (!botMentioned) {
                     return; // Ignorar mensajes de grupo sin mención
-                }
+                if (!botEsMencionado(mensaje.message, sock.user.id)) {
+                    mensajesEnProcesamiento.delete(mensajeId);
+                    return;
 }
-            // >>> FIN MEJORA 2 <<<
+}
 
             // Obtener texto del mensaje
-const texto = mensaje.message.conversation || 
-                         mensaje.message.extendedTextMessage?.text || '';
+            const texto = mensaje.message.conversation || 
                          mensaje.message.extendedTextMessage?.text || 
                          mensaje.message.imageMessage?.caption ||
                          mensaje.message.videoMessage?.caption || '';
-
+            
+            // ============================================
+            // EXTRACCIÓN RÁPIDA DE TEXTO
+            // ============================================
+            const texto = extraerTextoDeMensaje(mensaje.message);
 if (!texto || texto.trim() === '') {
+                mensajesEnProcesamiento.delete(mensajeId);
 return;
 }
-            
-            if (remitente && !remitente.includes('@g.us') && texto) {
 
             // ============================================
-            // COMANDOS PRIORITARIOS (solo en privado)
+            // LOG INMEDIATO (para depuración)
             // ============================================
+            console.log('\n═══════════════════════════════════════════════');
+            console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${texto.substring(0, 50)}${texto.length > 50 ? '...' : ''}"`);
+            console.log('═══════════════════════════════════════════════\n');
+            
+            guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${texto.substring(0, 100)}"`);
+
+// ============================================
+// COMANDOS PRIORITARIOS (solo en privado)
+// ============================================
             if (esPrivado) {
+            if (!esGrupo) {
 const cmd = texto.toLowerCase().trim();
 
-console.log('\n═══════════════════════════════════════════════');
-@@ -1770,7 +2053,7 @@ async function iniciarWhatsApp() {
+                console.log('\n═══════════════════════════════════════════════');
+                console.log(`📩 MENSAJE RECIBIDO de ${remitente.split('@')[0]}: "${cmd}"`);
+                console.log('═══════════════════════════════════════════════\n');
+                
+                guardarLogLocal(`📩 Mensaje de ${remitente.split('@')[0]}: "${cmd}"`);
+                
+if (cmd === 'actualizar' || cmd === 'update' || cmd === 'listagrupos' || cmd === 'grupos') {
+setImmediate(() => {
+procesarComandoPrioritario(sock, cmd, remitente, url_sheets);
+});
+                    mensajesEnProcesamiento.delete(mensajeId);
+return;
+}
+
+else if (cmd === 'status' || cmd === 'estado') {
+                    if (procesandoComandoPrioritario) {
+                        guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
+                        setTimeout(async () => {
+                            guardarLogLocal(`   Procesando comando: status (diferido)`);
+                    setImmediate(async () => {
+                        if (procesandoComandoPrioritario) {
+                            guardarLogLocal(`   ⏳ Comando status en espera (prioritario en ejecución)`);
+                            setTimeout(async () => {
+                                guardarLogLocal(`   Procesando comando: status (diferido)`);
+                                const agenda = cargarAgendaLocal();
+                                const total = agenda.grupos?.length || 0;
+                                const pestanas = Object.keys(agenda.pestanas || {}).length;
+                                const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                                
+                                // Obtener horarios programados para mostrar
+                                const horarios = new Set();
+                                if (agenda.pestanas) {
+                                    Object.values(agenda.pestanas).forEach(p => {
+                                        if (p.horario) horarios.add(p.horario);
+                                    });
+                                }
+                                
+                                let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 45.0*\n\n` +
+                                              `⏰ MODO: setTimeout + Delay inteligente\n` +
+                                              `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                              `📋 Grupos totales: ${total}\n` +
+                                              `✅ Grupos activos: ${activos}\n` +
+                                              `📌 Pestañas: ${pestanas}\n` +
+                                              `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
+                                              `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
+                                              `📦 Múltiples archivos: ACTIVADO\n` +
+                                              `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
+                                              `💬 Interacciones: ACTIVADO (inmediatez optimizada)\n` +
+                                              `✍️  Typing adaptativo: activado\n` +
+                                              `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                              `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                              `🔄 Actualización automática: 6:00 AM\n` +
+                                              `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                              `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                              `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
+                                              `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                              `⚡  Latencia: INMEDIATEZ OPTIMIZADA\n` +
+                                              `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                              `🔄 Consulta masiva: RESTAURADA\n` +
+                                              `🗑️  Limpieza automática: activada\n` +
+                                              `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
+                                              `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                              `📤 Comando listagrupos: disponible (con caché)\n` +
+                                              `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
+                                              `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)`;
+                                
+                                await sock.sendMessage(remitente, { text: mensaje });
+                                mensajesEnProcesamiento.delete(mensajeId);
+                            }, 1000);
+                        } else {
+                            guardarLogLocal(`   Procesando comando: status`);
+const agenda = cargarAgendaLocal();
+const total = agenda.grupos?.length || 0;
+const pestanas = Object.keys(agenda.pestanas || {}).length;
+@@ -2053,7 +2141,7 @@ async function iniciarWhatsApp() {
 });
 }
 
-                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 43.0*\n\n` +
                             let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 44.0*\n\n` +
+                            let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 45.0*\n\n` +
 `⏰ MODO: setTimeout + Delay inteligente\n` +
 `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
 `📋 Grupos totales: ${total}\n` +
-@@ -1780,6 +2063,7 @@ async function iniciarWhatsApp() {
+@@ -2063,7 +2151,7 @@ async function iniciarWhatsApp() {
 `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
 `📦 Múltiples archivos: ACTIVADO\n` +
 `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
                                           `💬 Interacciones: ACTIVADO (menciones, respuestas, reacciones)\n` +
+                                          `💬 Interacciones: ACTIVADO (inmediatez optimizada)\n` +
 `✍️  Typing adaptativo: activado\n` +
 `🔗 Link Previews: CON IMAGEN (caché local)\n` +
 `📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -1815,7 +2099,7 @@ async function iniciarWhatsApp() {
-});
-}
-
-                        let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 43.0*\n\n` +
-                        let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 44.0*\n\n` +
-`⏰ MODO: setTimeout + Delay inteligente\n` +
-`📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
-`📋 Grupos totales: ${total}\n` +
-@@ -1825,6 +2109,7 @@ async function iniciarWhatsApp() {
-`⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
-`📦 Múltiples archivos: ACTIVADO\n` +
-`⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
-                                      `💬 Interacciones: ACTIVADO (menciones, respuestas, reacciones)\n` +
-`✍️  Typing adaptativo: activado\n` +
-`🔗 Link Previews: CON IMAGEN (caché local)\n` +
-`📚 Data Store: ACTIVADO (extracción local)\n` +
-@@ -1845,7 +2130,51 @@ async function iniciarWhatsApp() {
+@@ -2072,7 +2160,7 @@ async function iniciarWhatsApp() {
+`🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+`📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
+`👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                          `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                          `⚡  Latencia: INMEDIATEZ OPTIMIZADA\n` +
+`⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+`🔄 Consulta masiva: RESTAURADA\n` +
+`🗑️  Limpieza automática: activada\n` +
+@@ -2083,99 +2171,72 @@ async function iniciarWhatsApp() {
+`🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)`;
 
 await sock.sendMessage(remitente, { text: mensaje });
+                        }, 1000);
+                    } else {
+                        guardarLogLocal(`   Procesando comando: status`);
+                        const agenda = cargarAgendaLocal();
+                        const total = agenda.grupos?.length || 0;
+                        const pestanas = Object.keys(agenda.pestanas || {}).length;
+                        const activos = agenda.grupos?.filter(g => g.activo === 'SI').length || 0;
+                        
+                        // Obtener horarios programados para mostrar
+                        const horarios = new Set();
+                        if (agenda.pestanas) {
+                            Object.values(agenda.pestanas).forEach(p => {
+                                if (p.horario) horarios.add(p.horario);
+                            });
+                            mensajesEnProcesamiento.delete(mensajeId);
 }
-                    return;
-                }
-            }
+                        
+                        let mensaje = `📊 *ESTADO DEL BOT - VERSIÓN 44.0*\n\n` +
+                                      `⏰ MODO: setTimeout + Delay inteligente\n` +
+                                      `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
+                                      `📋 Grupos totales: ${total}\n` +
+                                      `✅ Grupos activos: ${activos}\n` +
+                                      `📌 Pestañas: ${pestanas}\n` +
+                                      `⏱️  Horarios programados: ${Array.from(horarios).join(', ') || 'Ninguno'}\n` +
+                                      `⏱️  Delay mensajes: ${CONFIG.tiempo_entre_mensajes_min}-${CONFIG.tiempo_entre_mensajes_max} seg (inteligente)\n` +
+                                      `📦 Múltiples archivos: ACTIVADO\n` +
+                                      `⏱️ Delay entre archivos: ${CONFIG.delay_entre_archivos}s\n` +
+                                      `💬 Interacciones: ACTIVADO (menciones, respuestas, reacciones)\n` +
+                                      `✍️  Typing adaptativo: activado\n` +
+                                      `🔗 Link Previews: CON IMAGEN (caché local)\n` +
+                                      `📚 Data Store: ACTIVADO (extracción local)\n` +
+                                      `🔄 Actualización automática: 6:00 AM\n` +
+                                      `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
+                                      `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
+                                      `📁 Carpeta multimedia: ${CONFIG.carpeta_multimedia}\n` +
+                                      `👥  Grupos completos: espera 30 segundos en "listagrupos"\n` +
+                                      `⚡  Latencia: CORREGIDA (mensajes inmediatos)\n` +
+                                      `⚡⚡ Comandos prioritarios: ACTIVADOS\n` +
+                                      `🔄 Consulta masiva: RESTAURADA\n` +
+                                      `🗑️  Limpieza automática: activada\n` +
+                                      `📦 Tabla producto-archivo: MÚLTIPLES ARCHIVOS\n` +
+                                      `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
+                                      `📤 Comando listagrupos: disponible (con caché)\n` +
+                                      `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
+                                      `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)`;
+                        
+                        await sock.sendMessage(remitente, { text: mensaje });
+                    }
+                    });
+return;
+}
+}
 
-            // ============================================
-            // PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES)
-            // ============================================
+// ============================================
+// PROCESAR INTERACCIONES (RESPUESTAS A MENSAJES)
+// ============================================
             
             // Obtener producto del mensaje citado
             const nombreProducto = await obtenerProductoDesdeMensajeCitado(sock, mensaje);
             if (!nombreProducto) return;
+            setImmediate(async () => {
+                try {
+                    // Obtener producto del mensaje citado
+                    const nombreProducto = await obtenerProductoDesdeMensajeCitado(sock, mensaje);
+                    if (!nombreProducto) {
+                        mensajesEnProcesamiento.delete(mensajeId);
+                        return;
+                    }
 
             guardarLogLocal(`   🔍 Producto detectado en mensaje citado: "${nombreProducto}"`);
+                    guardarLogLocal(`   🔍 Producto detectado en mensaje citado: "${nombreProducto}"`);
 
             // Obtener datos completos del producto
             const datosProducto = obtenerDatosProducto(nombreProducto);
             if (!datosProducto) return;
+                    // Obtener datos completos del producto
+                    const datosProducto = obtenerDatosProducto(nombreProducto);
+                    if (!datosProducto) {
+                        mensajesEnProcesamiento.delete(mensajeId);
+                        return;
+                    }
 
             // Clasificar la consulta del usuario
             const tipoConsulta = clasificarConsulta(texto);
+                    // Clasificar la consulta del usuario
+                    const tipoConsulta = clasificarConsulta(texto);
 
             if (tipoConsulta !== 'no_respondible') {
                 // Generar respuesta automática
@@ -469,6 +525,39 @@ await sock.sendMessage(remitente, { text: mensaje });
                 if (respuesta) {
                     await sock.sendMessage(remitente, { text: respuesta });
                     guardarLogLocal(`   ✅ Respuesta automática enviada (${tipoConsulta})`);
+                    if (tipoConsulta !== 'no_respondible') {
+                        // Generar respuesta automática
+                        const respuesta = generarRespuestaAutomatica(tipoConsulta, nombreProducto, datosProducto);
+                        if (respuesta) {
+                            // Simular typing antes de responder
+                            const delayTyping = Math.floor(Math.random() * (CONFIG.delay_respuesta_max - CONFIG.delay_respuesta_min + 1) + CONFIG.delay_respuesta_min);
+                            await simularTyping(sock, remitente, delayTyping);
+                            
+                            await sock.sendMessage(remitente, { text: respuesta });
+                            guardarLogLocal(`   ✅ Respuesta automática enviada (${tipoConsulta})`);
+                        }
+                    } else {
+                        // Enviar alerta al admin
+                        const clienteNumero = remitente.split('@')[0];
+                        const lugar = esGrupo ? `Grupo` : `Chat privado`;
+                        const enlace = generarEnlaceWaMe(remitente, nombreProducto, texto);
+                        
+                        const datosAlerta = {
+                            producto: nombreProducto,
+                            clienteNombre: clienteNumero,
+                            clienteNumero: clienteNumero,
+                            pregunta: texto,
+                            lugar: lugar,
+                            tiempo: 'ahora mismo',
+                            enlace: enlace
+                        };
+                        
+                        await enviarAlertaAdmin(sock, sock.user.id, datosAlerta);
+                    }
+                } catch (error) {
+                    guardarLogLocal(`   ❌ Error procesando interacción: ${error.message}`);
+                } finally {
+                    mensajesEnProcesamiento.delete(mensajeId);
 }
             } else {
                 // Enviar alerta al admin
@@ -487,28 +576,18 @@ await sock.sendMessage(remitente, { text: mensaje });
                 };
                 
                 await enviarAlertaAdmin(sock, sock.user.id, datosAlerta);
-}
+            }
+            });
 });
 
-@@ -1854,13 +2183,18 @@ async function iniciarWhatsApp() {
-console.log('   - "listagrupos" - ⚡ PRIORITARIO');
-console.log('   - "status" - Ver estado del bot');
-console.log('   - Presiona CTRL+C para salir\n');
-        console.log('📦 **NUEVO: MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-        console.log('📦 **MÚLTIPLES ARCHIVOS POR PRODUCTO**');
-console.log('   - Ejemplo: Si el producto es "gorra", busca:');
-console.log('     gorra.jpg (imagen con texto)');
-console.log('     gorra.mp4 (🎬 video de gorra)');
+console.log('\n📝 Comandos disponibles en WhatsApp:');
+@@ -2190,6 +2251,9 @@ async function iniciarWhatsApp() {
 console.log('     gorra.pdf (📄 información de gorra)');
-        console.log('⏱️ **NUEVO: DELAY INTELIGENTE**');
-        console.log('   - Se adapta automáticamente al tiempo real de envío\n');
-        console.log('⏱️ **DELAY INTELIGENTE**');
-        console.log('   - Se adapta automáticamente al tiempo real de envío');
-        console.log('💬 **INTERACCIONES ACTIVADAS**');
-        console.log('   - En grupos: menciona al bot con @ para activar');
-        console.log('   - Responde automáticamente a consultas de precio/info');
-        console.log('   - Las preguntas no respondibles alertan al admin');
-        console.log('   - Reacciona con 👍❤️😮🙏😂 y el bot responderá\n');
-
-} catch (error) {
-guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
+console.log('⏱️ **DELAY INTELIGENTE**');
+console.log('   - Se adapta automáticamente al tiempo real de envío');
+        console.log('⚡ **INMEDIATEZ OPTIMIZADA**');
+        console.log('   - Los mensajes se procesan inmediatamente al llegar');
+        console.log('   - Simulación de typing antes de responder (1-3 segundos)');
+console.log('💬 **INTERACCIONES ACTIVADAS**');
+console.log('   - En grupos: menciona al bot con @ para activar');
+console.log('   - Responde automáticamente a consultas de precio/info');
