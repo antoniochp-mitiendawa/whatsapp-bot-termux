@@ -1,6 +1,3 @@
-#!/bin/bash
-
-echo "===================================="
 echo "INSTALADOR WHATSAPP BOT PARA TERMUX"
 echo "===================================="
 echo ""
@@ -14,6 +11,7 @@ echo "===================================="
 echo ""
 
 # Pedir la URL de Google Sheets
+echo "Pega la URL de Google Sheets que obtuviste en el paso anterio:"
 echo "✏️  Pega la URL de Google Sheets y presiona ENTER:"
 read URL_SHEETS
 
@@ -21,9 +19,13 @@ read URL_SHEETS
 echo $URL_SHEETS > url_sheets.txt
 
 echo ""
+echo "✅ URL guardada"
 echo "✅ URL guardada correctamente"
 echo "La URL está en el archivo: url_sheets.txt"
 echo ""
+echo "En unos minutos podrás usar el bot"
+echo ""
+echo "PRÓXIMO PASO: Ejecuta el comando que te daré"
 echo "===================================="
 echo "SIGUIENTE PASO:"
 echo "Ejecuta este comando:"
