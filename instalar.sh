@@ -1,85 +1,63 @@
 #!/bin/bash
 
 echo "===================================="
-echo "🚀 INSTALADOR WHATSAPP BOT v46.1"
+echo "🚀 INSTALADOR AUTOMÁTICO"
+echo "WHATSAPP BOT PARA TERMUX"
 echo "===================================="
 echo ""
 
-# PASO 1: Instalar lo básico
-echo "📦 PASO 1: Instalando programas necesarios..."
-pkg update -y
+# PASO 1: Instalar Git
+echo " PASO 1: Instalando Git..."
 pkg install git -y
-pkg install nodejs-lts -y
-pkg install yarn -y
-pkg install cronie termux-services -y
-pkg install wget -y
 
-# PASO 2: Clonar el repositorio
-echo "📦 PASO 2: Descargando el bot..."
-rm -rf whatsapp-bot-termux 2>/dev/null
+# PASO 2: Intentar clonar de diferentes formas
+echo " PASO 2: Descargando el bot..."
+
+# Intento 1: Con git clone normal
 git clone https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux.git
+sleep 2
+
+# Si falla, intentamos con wget y zip
+if [ $? -ne 0 ]; then
+  echo " Intento 2: Usando método alternativo..."
+  pkg install wget -y
+  pkg install unzip -y
+  wget https://github.com/antoniochp-mitiendawa/whatsapp-bot-termux/archive/refs/heads/main.zip
+  unzip main.zip
+  mv whatsapp-bot-termux-main whatsapp-bot-termux
+fi
+
+# Esperar un momento antes de continuar
+sleep 2
+
+# Entrar a la carpeta del repositorio
 cd whatsapp-bot-termux
 
-# PASO 3: Guardar la URL
+# PASO 3: Pedir la URL
 echo ""
 echo "===================================="
-echo "🔗 URL DE GOOGLE SHEETS"
+echo "🔗 NECESITAS TU URL DE GOOGLE SHEETS"
 echo "===================================="
-echo "1. Abre Google Sheets"
-echo "2. En el menú 'Control WhatsApp'"
-echo "3. Ve a '📚 Ver Instrucciones'"
-echo "4. Copia la URL que aparece"
+echo "1. Ve a Google Sheets"
+echo "2. Menú 'Control WhatsApp'"
+echo "3. Haz clic en 'Obtener URL'"
+echo "4. Copia la URL"
 echo "===================================="
 echo ""
-echo "📝 Escribe la URL y presiona Enter:"
-read USER_URL
-echo $USER_URL > url_sheets.txt
-mkdir -p whatsapp-bot
-echo $USER_URL > whatsapp-bot/url_sheets.txt
+echo "✏️  Pega la URL aquí:"
+read URL_SHEETS
 
-# PASO 4: Instalar dependencias
-echo ""
-echo "📦 PASO 3: Instalando librerías..."
-cd whatsapp-bot
-npm init -y
-npm install @whiskeysockets/baileys
-npm install @hapi/boom
-npm install qrcode-terminal
-npm install node-cron
-npm install axios
-npm install pino
-npm install link-preview-js
-npm install @rodrigogs/baileys-store
+# PASO 4: Guardar la URL
+echo $URL_SHEETS > url_sheets.txt
 
-# PASO 5: Crear carpeta de logs
-mkdir -p /storage/emulated/0/WhatsAppBot/logs
+# PASO 5: Ejecutar la configuración completa
+echo ""
+echo " PASO 3: Configurando todo..."
+bash setup.sh
 
 echo ""
 echo "===================================="
-echo "✅ INSTALACIÓN COMPLETA"
+echo "✅ TODO INSTALADO CORRECTAMENTE"
 echo "===================================="
+echo "El bot está listo para usar"
 echo ""
-
-# PASO 6: Preguntar si quiere iniciar
-echo "🤖 El bot ya está instalado"
-echo ""
-echo "¿Quieres iniciar el bot AHORA?"
-echo "Escribe 1 y presiona Enter para INICIAR"
-echo "Escribe 2 y presiona Enter para SALIR"
-echo ""
-read OPCION
-
-if [ "$OPCION" == "1" ]; then
-    echo ""
-    echo "🚀 INICIANDO BOT..."
-    echo "======================"
-    echo ""
-    cd whatsapp-bot
-    node bot.js
-else
-    echo ""
-    echo "📝 Para iniciar el bot después:"
-    echo "cd whatsapp-bot-termux/whatsapp-bot"
-    echo "node bot.js"
-    echo ""
-fi
