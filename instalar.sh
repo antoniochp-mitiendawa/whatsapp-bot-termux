@@ -41,7 +41,7 @@ echo "✅ URL guardada"
 
 # 8. Descargar bot.js desde el repositorio
 echo "📥 Descargando bot.js..."
-wget -O bot.js https://raw.githubusercontent.com/antoniochp-mitiendawa/whatsapp-bot-termux/main/whatsapp-bot-termux/bot.js
+wget -O bot.js https://raw.githubusercontent.com/antoniochp-mitiendawa/whatsapp-bot-termux/main/whatsapp-bot/bot.js
 
 echo ""
 echo "===================================="
