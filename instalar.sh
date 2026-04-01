@@ -2,7 +2,7 @@
 
 echo "===================================="
 echo "🚀 INSTALADOR WHATSAPP BOT v47.0"
-echo "📦 OPTIMIZADO PARA TERMUX (SIN SSH)"
+echo "📦 OPTIMIZADO PARA TERMUX (SOLUCIÓN ERROR 128)"
 echo "===================================="
 echo ""
 
@@ -12,9 +12,8 @@ pkg update -y
 pkg upgrade -y
 pkg install git nodejs-lts python make clang -y
 
-# PASO 2: Configurar Git para evitar Error 128 (Documentación Oficial)
-# Esto fuerza a usar HTTPS en lugar de SSH para las dependencias de Baileys
-echo "🔧 PASO 2: Configurando protocolo Git seguro..."
+# PASO 2: Configurar Git para evitar Error 128 (Documentación Oficial Baileys)
+echo "🔧 PASO 2: Configurando protocolo Git seguro (HTTPS)..."
 git config --global url."https://github.com/".insteadOf ssh://git@github.com/
 
 # PASO 3: Clonar el repositorio
@@ -28,34 +27,27 @@ echo ""
 echo "===================================="
 echo "🔗 URL DE GOOGLE SHEETS"
 echo "===================================="
-echo "1. Abre Google Sheets"
-echo "2. En el menú 'Control WhatsApp'"
-echo "3. Ve a '📚 Ver Instrucciones'"
-echo "4. Copia la URL que aparece"
-echo "===================================="
-echo ""
 echo "📝 Escribe la URL y presiona Enter:"
 read USER_URL
 echo $USER_URL > url_sheets.txt
 
-# Crear carpeta del bot si no existe y copiar la URL
+# Crear carpeta del bot y mover archivos necesarios
 mkdir -p whatsapp-bot
-echo $USER_URL > whatsapp-bot/url_sheets.txt
+mv url_sheets.txt whatsapp-bot/url_sheets.txt
 
-# PASO 5: Instalar dependencias de Node.js
+# PASO 5: Instalar dependencias de Node.js desde cero
 echo ""
-echo "📦 PASO 4: Instalando librerías de Node..."
+echo "📦 PASO 4: Instalando librerías de Node (Instalación Limpia)..."
 cd whatsapp-bot
-# Limpieza previa para instalación limpia
 rm -rf node_modules package-lock.json
 
 npm init -y
-# Instalación de Baileys y dependencias críticas
+# Instalación completa de librerías
 npm install @whiskeysockets/baileys
 npm install @hapi/boom qrcode-terminal node-cron axios pino link-preview-js @rodrigogs/baileys-store
 
 # PASO 6: Crear carpetas de sistema
-mkdir -p /storage/emulated/0/WhatsAppBot/logs
+mkdir -p logs
 
 echo ""
 echo "===================================="
@@ -63,7 +55,7 @@ echo "✅ INSTALACIÓN COMPLETA"
 echo "===================================="
 echo ""
 
-# PASO 7: Menú de inicio
+# PASO 7: Menú de inicio (Asegurando que aparezca)
 echo "🤖 El bot ya está instalado"
 echo ""
 echo "¿Quieres iniciar el bot AHORA?"
