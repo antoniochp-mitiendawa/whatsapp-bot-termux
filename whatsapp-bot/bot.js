@@ -5,7 +5,9 @@
 // + MEJORA 2: Ignorar mensajes de grupos
 // + NUEVO: Sistema de SpinTex y SpinEmoji (CORREGIDO)
 // + NUEVO: Tabla de correspondencia producto-archivo
-// + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados)
+// + VERSIÓN 42.0: Modo Ahorro de Batería (SOLO horarios programados con setTimeout)
+// + MEJORA: Al actualizar, reprograma todos los envíos
+// + MEJORA: 1 cron job a las 6am solo para actualizar agenda
 // ============================================
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, getUrlInfo, Browsers } = require('@whiskeysockets/baileys');
@@ -37,11 +39,16 @@ const CONFIG = {
     carpeta_logs: './logs',
     carpeta_cache: './cache',
     numero_telefono: '',
-    horarios_actualizacion: ['06:00', '18:00'],
+    horarios_actualizacion: ['06:00'], // SOLO 6am para actualización automática
     dias_retencion_store: 30,
     carpeta_multimedia: '/storage/emulated/0/WhatsAppBot',
     tiempo_espera_grupos: 30000
 };
+
+// ============================================
+// VARIABLES GLOBALES PARA TIMERS
+// ============================================
+let timersEnvios = []; // Array para guardar todos los setTimeout activos
 
 // Crear carpetas necesarias
 if (!fs.existsSync(CONFIG.carpeta_logs)) {
@@ -473,6 +480,11 @@ async function actualizarAgenda(sock, url_sheets, origen = 'automático') {
                 productosCache = data.productos;
                 ultimaActualizacionProductos = Date.now();
                 guardarLogLocal(`📦 Caché de productos actualizado desde Sheets: ${productosCache.length} productos`);
+            }
+            
+            // Si hay un socket activo, reprogramar todos los envíos
+            if (sock) {
+                reprogramarTodosLosEnvios(sock);
             }
             
             return true;
@@ -978,15 +990,68 @@ async function verificarMensajesLocales(sock) {
 }
 
 // ============================================
-// NUEVA FUNCIÓN: Programar envíos en horarios específicos
+// NUEVA FUNCIÓN: Calcular tiempo hasta próximo horario
 // ============================================
-function programarEnviosHorario(sock) {
-    guardarLogLocal('⏰ PROGRAMANDO ENVÍOS EN HORARIOS ESPECÍFICOS (MODO AHORRO DE BATERÍA)');
+function calcularTiempoHastaHorario(horario) {
+    const ahora = new Date();
+    const [horas, minutos] = horario.split(':').map(Number);
     
-    // Obtener todos los horarios únicos de la agenda
+    const proximo = new Date(ahora);
+    proximo.setHours(horas, minutos, 0, 0);
+    
+    // Si ya pasó, programar para mañana
+    if (proximo <= ahora) {
+        proximo.setDate(proximo.getDate() + 1);
+    }
+    
+    return proximo - ahora;
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Programar un horario específico
+// ============================================
+function programarHorario(horario, sock) {
+    const tiempoEspera = calcularTiempoHastaHorario(horario);
+    const fechaEjecucion = new Date(Date.now() + tiempoEspera);
+    
+    guardarLogLocal(`   📅 Programado: ${horario} (en ${Math.round(tiempoEspera/60000)} minutos - ${fechaEjecucion.toLocaleString()})`);
+    
+    const timer = setTimeout(async () => {
+        guardarLogLocal(`⏰ EJECUTANDO HORARIO PROGRAMADO: ${horario}`);
+        await verificarMensajesLocales(sock);
+        
+        // Reprogramar para el mismo horario mañana
+        programarHorario(horario, sock);
+    }, tiempoEspera);
+    
+    // Guardar el timer para poder cancelarlo después
+    timersEnvios.push(timer);
+    return timer;
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Cancelar todos los timers activos
+// ============================================
+function cancelarTodosLosTimers() {
+    if (timersEnvios.length > 0) {
+        guardarLogLocal(`🔄 Cancelando ${timersEnvios.length} timers activos...`);
+        timersEnvios.forEach(timer => clearTimeout(timer));
+        timersEnvios = [];
+    }
+}
+
+// ============================================
+// NUEVA FUNCIÓN: Reprogramar todos los envíos según la agenda actual
+// ============================================
+function reprogramarTodosLosEnvios(sock) {
+    // Cancelar todos los timers existentes
+    cancelarTodosLosTimers();
+    
+    // Cargar la agenda actualizada
     const agenda = cargarAgendaLocal();
-    const horariosUnicos = new Set();
     
+    // Obtener horarios únicos
+    const horariosUnicos = new Set();
     if (agenda.pestanas) {
         Object.values(agenda.pestanas).forEach(pestana => {
             if (pestana.horario) {
@@ -995,25 +1060,11 @@ function programarEnviosHorario(sock) {
         });
     }
     
-    // Programar cada horario
+    guardarLogLocal(`🔄 Reprogramando ${horariosUnicos.size} horarios de envío...`);
+    
+    // Programar cada horario único
     horariosUnicos.forEach(horario => {
-        const [horas, minutos] = horario.split(':');
-        
-        // Validar que sea un horario válido
-        if (horas && minutos && !isNaN(parseInt(horas)) && !isNaN(parseInt(minutos))) {
-            const expresionCron = `${minutos} ${horas} * * *`;
-            
-            cron.schedule(expresionCron, async () => {
-                if (procesandoComandoPrioritario) {
-                    guardarLogLocal(`⏰ Envío de ${horario} pospuesto (comando prioritario en ejecución)`);
-                    return;
-                }
-                guardarLogLocal(`⏰ HORARIO PROGRAMADO: ${horario} - Ejecutando envíos...`);
-                await verificarMensajesLocales(sock);
-            });
-            
-            guardarLogLocal(`   ✅ Programado: ${horario} (cron: ${expresionCron})`);
-        }
+        programarHorario(horario, sock);
     });
 }
 
@@ -1403,11 +1454,11 @@ async function iniciarWhatsApp() {
     console.log('====================================');
     console.log('🤖 BOT WHATSAPP - VERSIÓN 41.0 (SPINTEX LIMPIO + TABLA DE ARCHIVOS)');
     console.log('====================================\n');
-    console.log('⏰ Actualización de agenda: 6:00 AM y 6:00 PM');
+    console.log('⏰ Actualización de agenda: 6:00 AM (solo 1 vez al día)');
     console.log('✍️  Typing adaptativo activado');
     console.log('🔗 Link Previews: título/descripción con Baileys, imagen con caché local');
     console.log('📚 Data Store activado - Extrayendo grupos localmente');
-    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y cada 12h');
+    console.log('🔄 Sincronización automática con Google Sheets: al iniciar y 6am');
     console.log('🏷️  Nombres de grupos: búsqueda en store + CACHÉ + consulta directa');
     console.log(`🧹 Limpieza automática del store: mensajes > ${CONFIG.dias_retencion_store} días`);
     console.log('🖼️  SOPORTE MULTIMEDIA: imágenes, audios, videos, documentos');
@@ -1428,7 +1479,8 @@ async function iniciarWhatsApp() {
     console.log('   - Los archivos se envían automáticamente según el producto elegido');
     console.log('⚡ **MODO AHORRO DE BATERÍA ACTIVADO**');
     console.log('   - ✅ Ya NO se verifica cada minuto');
-    console.log('   - ✅ Solo envía en horarios programados\n');
+    console.log('   - ✅ Solo envía en horarios programados con setTimeout');
+    console.log('   - ✅ Al actualizar, reprograma todos los horarios\n');
 
     const url_sheets = leerURL();
     if (!url_sheets) {
@@ -1536,8 +1588,8 @@ async function iniciarWhatsApp() {
                 guardarLogLocal('🔄 Ejecutando sincronización inicial de grupos...');
                 await sincronizarGruposConSheets(sock, url_sheets);
                 
-                // PROGRAMAR ENVÍOS EN HORARIOS ESPECÍFICOS (NUEVO)
-                programarEnviosHorario(sock);
+                // PROGRAMAR TODOS LOS ENVÍOS CON SETTIMEOUT
+                reprogramarTodosLosEnvios(sock);
             }
 
             if (connection === 'close') {
@@ -1560,41 +1612,19 @@ async function iniciarWhatsApp() {
             limpiarStoreAntiguo();
         });
 
-        CONFIG.horarios_actualizacion.forEach(hora => {
-            const [horas, minutos] = hora.split(':');
-            const expresionCron = `${minutos} ${horas} * * *`;
-            
-            cron.schedule(expresionCron, async () => {
-                if (procesandoComandoPrioritario) {
-                    guardarLogLocal(`⏰ Sincronización pospuesta (comando prioritario en ejecución)`);
-                    return;
-                }
-                guardarLogLocal(`⏰ Sincronización programada de grupos (${hora})`);
-                await sincronizarGruposConSheets(sock, url_sheets);
-            });
-        });
-
-        CONFIG.horarios_actualizacion.forEach(hora => {
-            const [horas, minutos] = hora.split(':');
-            const expresionCron = `${minutos} ${horas} * * *`;
-            
-            cron.schedule(expresionCron, async () => {
-                if (procesandoComandoPrioritario) {
-                    guardarLogLocal(`⏰ Actualización pospuesta (comando prioritario en ejecución)`);
-                    return;
-                }
-                guardarLogLocal(`⏰ Actualización programada de agenda (${hora})`);
-                await actualizarAgenda(sock, url_sheets, 'programado');
-                
-                // Después de actualizar, reprogramar por si cambiaron los horarios
-                guardarLogLocal(`🔄 Reprogramando envíos tras actualización...`);
-                programarEnviosHorario(sock);
-            });
+        // SOLO 1 CRON JOB: A las 6am para actualizar agenda automáticamente
+        cron.schedule('0 6 * * *', async () => {
+            if (procesandoComandoPrioritario) {
+                guardarLogLocal('⏰ Actualización de 6am pospuesta (comando prioritario en ejecución)');
+                return;
+            }
+            guardarLogLocal('⏰ ACTUALIZACIÓN AUTOMÁTICA DE AGENDA (6:00 AM)');
+            await actualizarAgenda(sock, url_sheets, 'automático 6am');
         });
 
         // ============================================
         // ELIMINADO: El cron job que verificaba cada minuto
-        // Ya NO se ejecuta: cron.schedule('* * * * *', ...)
+        // ELIMINADO: Los cron jobs de sincronización de grupos
         // ============================================
 
         // ============================================
@@ -1657,7 +1687,7 @@ async function iniciarWhatsApp() {
                             }
                             
                             let mensaje = `📊 *ESTADO DEL BOT - MODO AHORRO*\n\n` +
-                                          `⏰ MODO: Solo envíos programados\n` +
+                                          `⏰ MODO: setTimeout (solo horarios programados)\n` +
                                           `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                           `📋 Grupos totales: ${total}\n` +
                                           `✅ Grupos activos: ${activos}\n` +
@@ -1667,7 +1697,7 @@ async function iniciarWhatsApp() {
                                           `✍️  Typing adaptativo: activado\n` +
                                           `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                           `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                          `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                          `🔄 Actualización automática: 6:00 AM\n` +
                                           `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
                                           `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
                                           `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
@@ -1680,7 +1710,7 @@ async function iniciarWhatsApp() {
                                           `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                           `📤 Comando listagrupos: disponible (con caché)\n` +
                                           `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                          `🔋 AHORRO DE BATERÍA: ACTIVADO (sin escaneo por minuto)`;
+                                          `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)`;
                             
                             await sock.sendMessage(remitente, { text: mensaje });
                         }, 1000);
@@ -1700,7 +1730,7 @@ async function iniciarWhatsApp() {
                         }
                         
                         let mensaje = `📊 *ESTADO DEL BOT - MODO AHORRO*\n\n` +
-                                      `⏰ MODO: Solo envíos programados\n` +
+                                      `⏰ MODO: setTimeout (solo horarios programados)\n` +
                                       `📅 Última actualización: ${agenda.ultima_actualizacion || 'N/A'}\n` +
                                       `📋 Grupos totales: ${total}\n` +
                                       `✅ Grupos activos: ${activos}\n` +
@@ -1710,7 +1740,7 @@ async function iniciarWhatsApp() {
                                       `✍️  Typing adaptativo: activado\n` +
                                       `🔗 Link Previews: CON IMAGEN (caché local)\n` +
                                       `📚 Data Store: ACTIVADO (extracción local)\n` +
-                                      `🔄 Sincronización Sheets: automática (6am/6pm)\n` +
+                                      `🔄 Actualización automática: 6:00 AM\n` +
                                       `🏷️  Nombres de grupos: CACHÉ + store + consulta directa\n` +
                                       `🧹 Limpieza store: automática (3 AM) - ${CONFIG.dias_retencion_store} días\n` +
                                       `🖼️  Soporte multimedia: ACTIVADO (imágenes, audios, videos, docs)\n` +
@@ -1723,7 +1753,7 @@ async function iniciarWhatsApp() {
                                       `🌐 Browser: ${existeSesion ? 'macOS/Desktop' : 'Ubuntu/Chrome'}\n` +
                                       `📤 Comando listagrupos: disponible (con caché)\n` +
                                       `🎲 SpinTex/SpinEmoji: CORREGIDO PARA BAILEYS\n` +
-                                      `🔋 AHORRO DE BATERÍA: ACTIVADO (sin escaneo por minuto)`;
+                                      `🔋 AHORRO DE BATERÍA: setTimeout ACTIVADO (0 verificaciones por minuto)`;
                         
                         await sock.sendMessage(remitente, { text: mensaje });
                     }
@@ -1732,8 +1762,8 @@ async function iniciarWhatsApp() {
         });
 
         console.log('\n📝 Comandos disponibles en WhatsApp:');
-        console.log('   - "actualizar" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
-        console.log('   - "listagrupos" - ⚡ PRIORITARIO (se ejecuta inmediatamente)');
+        console.log('   - "actualizar" - ⚡ PRIORITARIO (reprograma todos los horarios)');
+        console.log('   - "listagrupos" - ⚡ PRIORITARIO');
         console.log('   - "status" - Ver estado del bot');
         console.log('   - Presiona CTRL+C para salir\n');
         console.log('🎲 **SpinTex y SpinEmijo CORREGIDOS**');
@@ -1744,7 +1774,9 @@ async function iniciarWhatsApp() {
         console.log('   - Los archivos se envían automáticamente según el producto\n');
         console.log('🔋 **MODO AHORRO DE BATERÍA ACTIVADO**');
         console.log('   - ✅ Ya NO hay verificación cada minuto');
-        console.log('   - ✅ Solo envía en horarios programados\n');
+        console.log('   - ✅ setTimeout para cada horario');
+        console.log('   - ✅ 1 cron job a las 6am para actualizar');
+        console.log('   - ✅ Al actualizar, reprograma todos los horarios\n');
 
     } catch (error) {
         guardarLogLocal(`❌ ERROR FATAL: ${error.message}`);
@@ -1755,6 +1787,13 @@ async function iniciarWhatsApp() {
 process.on('SIGINT', () => {
     console.log('\n\n👋 Cerrando bot...');
     guardarLogLocal('BOT CERRADO MANUALMENTE');
+    
+    // Cancelar todos los timers antes de salir
+    if (timersEnvios.length > 0) {
+        guardarLogLocal(`🔄 Cancelando ${timersEnvios.length} timers activos...`);
+        timersEnvios.forEach(timer => clearTimeout(timer));
+    }
+    
     limpiarCacheImagenes();
     store.writeToFile(CONFIG.archivo_store);
     process.exit(0);
