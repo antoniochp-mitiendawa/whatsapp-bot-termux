@@ -2129,7 +2129,7 @@ async function iniciarWhatsApp() {
             mensajesEnProcesamiento.add(mensajeId);
             
             // Limpiar el set cada cierto tiempo para evitar crecimiento infinito
-            setTimeout(() => mensajesEnProcesamiento.delete(mensajeId), 10000);
+            setTimeout(() => mensajesEnProcesamiento.delete(mensajeId), 30000);
 
             // ============================================
             // PRIORIDAD 1: PROCESAR REACCIONES INMEDIATAMENTE
