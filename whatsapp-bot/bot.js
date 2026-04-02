@@ -264,8 +264,8 @@ function buscarTodosLosArchivosMultimedia(nombreBase) {
                         buscarRecursivo(rutaCompleta);
                     } else {
                         const nombreSinExtension = path.parse(archivo).name.toLowerCase();
-                        // Buscar si el nombre del archivo CONTIENE el nombre base
-                        if (nombreSinExtension.includes(nombreLimpio)) {
+                        // Buscar si el nombre del archivo COINCIDE EXACTAMENTE con el nombre base
+                        if (nombreSinExtension === nombreLimpio) {
                             archivosEncontrados.push({
                                 ruta: rutaCompleta,
                                 nombre: archivo,
